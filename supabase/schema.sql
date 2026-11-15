@@ -45,6 +45,9 @@ create table if not exists public.teachers (
   full_name   text not null,
   phone       text,
   notes       text,
+  age         int check (age between 10 and 100),
+  nationality text,
+  residence   text,
   active      boolean not null default true,
   created_at  timestamptz not null default now()
 );
@@ -70,6 +73,9 @@ create table if not exists public.students (
   guardian_phone text,
   birth_year     int,
   notes          text,
+  age            int check (age between 3 and 100),
+  nationality    text,             -- البلد
+  residence      text,             -- بلد الإقامة
   joined_at      date not null default current_date,
   active         boolean not null default true,
   created_at     timestamptz not null default now()
@@ -408,6 +414,18 @@ create policy teachers_select on public.teachers for select using (public.is_sta
 drop policy if exists teachers_write on public.teachers;
 create policy teachers_write on public.teachers for all
   using (public.my_role() in ('admin','supervisor')) with check (public.my_role() in ('admin','supervisor'));
+
+-- إسناد معلِّمة لحلقة: للقائدة، ولمسؤولة المسار في حلقات مسارها فقط
+create or replace function public.set_circle_teacher(cid bigint, tid bigint) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not (public.my_role() in ('admin','supervisor') and public.can_manage_circle(cid)) then
+    raise exception 'permission denied';
+  end if;
+  update public.circles set teacher_ref = tid where id = cid;
+end $$;
+revoke execute on function public.set_circle_teacher(bigint, bigint) from public, anon;
+grant execute on function public.set_circle_teacher(bigint, bigint) to authenticated;
 
 -- =====================================================================
 --  المسارات والحلقات الابتدائية (تُضاف مرة واحدة إذا كانت القاعدة فارغة)

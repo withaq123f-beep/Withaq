@@ -196,6 +196,7 @@ function supabaseBackend() {
       if (error) throw new Error(/confirm/i.test(error.message) ? 'أكِّدي بريدكِ أولًا من الرابط الذي وصلكِ، ثم ادخلي' : 'البريد أو كلمة المرور غير صحيحة');
     },
     signupOptions: () => run(sb.rpc('signup_options')),
+    setCircleTeacher: (cid, tid) => run(sb.rpc('set_circle_teacher', { cid, tid })),
     async signUp(name, u, p, requested, track, circles) {
       const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null, requested_track: track ? String(track) : null, requested_circles: (circles || []).map(String) }, emailRedirectTo: location.origin + location.pathname } });
       if (error) throw new Error(translateError(error.message));
@@ -765,30 +766,54 @@ PAGES.students = async (v) => {
   const add = $('#addStu'); if (add) add.onclick = () => studentForm();
 };
 
-function studentForm(s = null) {
+// ---- حقول مشتركة: البلد، والمسار ثم الحلقة ----
+const COUNTRIES = ['السعودية', 'موريتانيا', 'اليمن', 'مصر', 'السودان', 'الأردن', 'سوريا', 'فلسطين', 'العراق', 'الكويت', 'الإمارات', 'قطر', 'البحرين', 'عُمان', 'المغرب', 'الجزائر', 'تونس', 'ليبيا', 'الصومال', 'تشاد', 'مالي', 'السنغال', 'تركيا', 'إندونيسيا', 'ماليزيا', 'باكستان', 'الهند', 'نيجيريا'];
+const countryList = `<datalist id="countries">${COUNTRIES.map((c) => `<option value="${c}">`).join('')}</datalist>`;
+function trackCircleFields({ multi = false, selected = [], current = null } = {}) {
   const circles = myCircles();
+  const tracks = S.tracks.filter((t) => circles.some((c) => c.track_id === t.id));
+  const firstSel = circles.find((c) => selected.includes(c.id));
+  const tSel = firstSel?.track_id || (tracks.length === 1 ? tracks[0].id : '');
+  return `<label class="field">المسار<select class="input" name="tc_track"><option value="">اختاري المسار</option>${tracks.map((t) => `<option value="${t.id}"${t.id === tSel ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+    <div class="field ${multi ? 'full' : ''}" data-tc-box data-multi="${multi ? 1 : 0}" data-selected="${selected.join(',')}" data-current="${current ?? ''}">${multi ? 'حلقتها (يمكن أكثر من حلقة)' : 'الحلقة'}<div data-tc-list></div></div>`;
+}
+function wireTrackCircle(m) {
+  const tsel = m.querySelector('[name=tc_track]'); const box = m.querySelector('[data-tc-box]'); if (!tsel || !box) return;
+  const list = box.querySelector('[data-tc-list]'); const multi = box.dataset.multi === '1';
+  const selected = (box.dataset.selected || '').split(',').filter(Boolean).map(Number); const current = +box.dataset.current || null;
+  const draw = () => {
+    const cs = myCircles().filter((c) => c.track_id === +tsel.value).sort(byName);
+    if (!tsel.value) { list.innerHTML = '<span class="hint-line">اختاري المسار أولًا</span>'; return; }
+    if (multi) list.innerHTML = `<div class="choices">${cs.map((c) => { const other = c.teacher_ref && c.teacher_ref !== current ? teacherById(c.teacher_ref)?.full_name : '';
+        return `<label class="choice"><input type="checkbox" name="tc_circle" value="${c.id}" ${selected.includes(c.id) ? 'checked' : ''} style="accent-color:var(--rose-deep)"> ${esc(c.name)}${other ? ` <small style="color:var(--ink-3)">(${esc(other)})</small>` : ''}</label>`; }).join('') || '<span class="hint-line">لا حلقات</span>'}</div>`;
+    else list.innerHTML = `<select class="input" name="tc_circle"><option value="">بدون حلقة الآن</option>${cs.map((c) => `<option value="${c.id}"${selected.includes(c.id) ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+  };
+  tsel.onchange = draw; draw();
+}
+
+function studentForm(s = null) {
   modal(`<h2>${s ? 'تعديل بيانات الطالبة' : 'طالبة جديدة'}</h2>
-    <form class="form-grid" id="sf">
+    <form class="form-grid" id="sf">${countryList}
       <label class="field full">الاسم الكامل<input class="input" name="full_name" required value="${esc(s?.full_name)}"></label>
-      <label class="field">هاتف الطالبة<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(s?.phone)}"></label>
-      <label class="field">هاتف وليِّ الأمر<input class="input" name="guardian_phone" inputmode="tel" dir="ltr" value="${esc(s?.guardian_phone)}"></label>
-      <label class="field">سنة الميلاد<input class="input" name="birth_year" type="number" min="1940" max="2030" value="${esc(s?.birth_year)}"></label>
-      <label class="field">تاريخ الالتحاق<input class="input" name="joined_at" type="date" value="${esc(s?.joined_at || today())}"></label>
-      ${s ? '' : `<label class="field full">الحلقة<select class="input" name="circle_id"><option value="">بدون حلقة الآن</option>${circles.map((c) => `<option value="${c.id}"${+STU.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>`}
-      <label class="field full">ملاحظات<textarea class="input" name="notes">${esc(s?.notes)}</textarea></label>
+      <label class="field">رقم الهاتف<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(s?.phone)}"></label>
+      <label class="field">العمر<input class="input" name="age" type="number" min="3" max="100" inputmode="numeric" value="${esc(s?.age)}"></label>
+      <label class="field">البلد<input class="input" name="nationality" list="countries" value="${esc(s?.nationality)}"></label>
+      <label class="field">بلد الإقامة<input class="input" name="residence" list="countries" value="${esc(s?.residence)}"></label>
+      ${s ? '' : trackCircleFields({ selected: STU.circle && STU.circle !== 'none' ? [+STU.circle] : [] })}
       ${s ? `<label class="check full"><input type="checkbox" name="active"${s.active ? ' checked' : ''}> طالبة نشطة</label>` : ''}
       <div class="actions full"><button class="btn" type="submit">${s ? 'حفظ التعديل' : 'إضافة الطالبة'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
+    wireTrackCircle(m);
     m.querySelector('#sf').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, guardian_phone: fd.get('guardian_phone').trim() || null, birth_year: +fd.get('birth_year') || null, joined_at: fd.get('joined_at') || today(), notes: fd.get('notes').trim() || null };
+      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, age: +fd.get('age') || null, nationality: fd.get('nationality').trim() || null, residence: fd.get('residence').trim() || null };
       if (s) row.active = !!fd.get('active');
       try {
         if (s) await api.update('students', s.id, row);
         else {
-          const created = await api.insert('students', { ...row, active: true });
-          const cid = +fd.get('circle_id');
+          const created = await api.insert('students', { ...row, active: true, joined_at: today() });
+          const cid = +fd.get('tc_circle');
           if (cid) await api.insert('enrollments', { student_id: created.id, circle_id: cid, active: true, started_at: today() });
         }
         await loadAll(); close(); toast(s ? 'حُفظ التعديل 🌸' : 'أُضيفت الطالبة 🌸', 'ok'); route();
@@ -828,7 +853,10 @@ PAGES.student = async (v, arg) => {
       ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}</div>
     <dl class="facts">
       <div><dt>هاتف الطالبة</dt><dd dir="ltr" style="text-align:right">${esc(s.phone || '—')}</dd></div>
-      <div><dt>هاتف وليِّ الأمر</dt><dd dir="ltr" style="text-align:right">${esc(s.guardian_phone || '—')}</dd></div>
+      <div><dt>العمر</dt><dd>${s.age ? `${s.age} سنة` : '—'}</dd></div>
+      <div><dt>البلد</dt><dd>${esc(s.nationality || '—')}</dd></div>
+      <div><dt>بلد الإقامة</dt><dd>${esc(s.residence || '—')}</dd></div>
+      ${s.guardian_phone ? `<div><dt>هاتف وليِّ الأمر</dt><dd dir="ltr" style="text-align:right">${esc(s.guardian_phone)}</dd></div>` : ''}
       <div><dt>الالتحاق</dt><dd>${s.joined_at ? fmtDate(s.joined_at, { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</dd></div>
       <div><dt>آخر موضع حفظ</dt><dd>${lastM ? esc(posText(lastM.memo_to_surah, lastM.memo_to_ayah)) : '—'}</dd></div>
       ${sardRow ? `<div><dt>السرد الأسبوعي (آخر ٤)</dt><dd>${trailHtml(sardRow)} ${sardRow.streak >= SARD_LIMIT ? '<span class="tag red">وصلت حدَّ الحذف</span>' : sardRow.streak ? '<span class="tag amber">فاتها أسبوع</span>' : ''}</dd></div>` : ''}
@@ -991,7 +1019,7 @@ PAGES.staff = async (v) => {
     ${isAdmin() || isSup() ? '<button class="btn sm quiet" id="addTeacher" style="margin-bottom:8px">إضافة معلِّمة</button>' : ''}
     <div class="lines">${S.teachers.map((t) => { const cs = S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.name);
       return `<button class="line" data-teacher="${t.id}"><span class="initial">${esc(initial(t.full_name))}</span><div class="grow"><div class="t">${esc(t.full_name)}</div>
-      <div class="s">${esc(cs.join('، ') || 'بلا حلقة')}${t.phone ? `، <span dir="ltr">${esc(t.phone)}</span>` : ''}</div></div>${t.active ? '' : '<span class="tag gray">متوقفة</span>'}</button>`; }).join('') || '<div class="empty">لم تُضف معلِّمات بعد</div>'}</div>
+      <div class="s">${esc(cs.join('، ') || 'بلا حلقة')}${t.residence ? `، ${esc(t.residence)}` : ''}${t.phone ? `، <span dir="ltr">${esc(t.phone)}</span>` : ''}</div></div>${t.active ? '' : '<span class="tag gray">متوقفة</span>'}</button>`; }).join('') || '<div class="empty">لم تُضف معلِّمات بعد</div>'}</div>
   </section></div>`;
 
   $('#sDate').onchange = (e) => { if (e.target.value) { STF.date = e.target.value; route(); } };
@@ -1043,20 +1071,34 @@ function profileForm(p) {
 
 // معلِّمات الحلقات: بيانات فقط بلا حسابات دخول
 function teacherForm(t = null) {
+  const mine = t ? S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.id) : [];
   modal(`<h2>${t ? 'بيانات المعلِّمة' : 'معلِّمة جديدة'}</h2>
-    <form class="form-grid" id="tcf">
+    <form class="form-grid" id="tcf">${countryList}
       <label class="field full">الاسم الكامل<input class="input" name="full_name" required value="${esc(t?.full_name)}"></label>
-      <label class="field full">رقم الهاتف<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(t?.phone)}"></label>
-      <label class="field full">ملاحظات<textarea class="input" name="notes">${esc(t?.notes)}</textarea></label>
+      <label class="field">رقم الهاتف<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(t?.phone)}"></label>
+      <label class="field">العمر<input class="input" name="age" type="number" min="10" max="100" inputmode="numeric" value="${esc(t?.age)}"></label>
+      <label class="field">البلد<input class="input" name="nationality" list="countries" value="${esc(t?.nationality)}"></label>
+      <label class="field">بلد الإقامة<input class="input" name="residence" list="countries" value="${esc(t?.residence)}"></label>
+      ${trackCircleFields({ multi: true, selected: mine, current: t?.id })}
       ${t ? `<label class="check full"><input type="checkbox" name="active"${t.active ? ' checked' : ''}> على رأس العمل</label>` : ''}
-      <p class="full" style="color:var(--ink-3);font-size:.86rem">تُسنَد المعلِّمة لحلقتها من «المسارات والحلقات».</p>
       <div class="actions full"><button class="btn" type="submit">${t ? 'حفظ' : 'إضافة المعلِّمة'}</button>${t && isAdmin() ? '<button class="btn danger" type="button" id="delTc">حذف</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
+    wireTrackCircle(m);
     m.querySelector('#tcf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
-      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, notes: fd.get('notes').trim() || null, active: t ? !!fd.get('active') : true };
-      try { t ? await api.update('teachers', t.id, row) : await api.insert('teachers', row); await loadAll(); close(); toast(t ? 'حُفظت بيانات المعلِّمة 🌸' : 'أُضيفت المعلِّمة 🌸', 'ok'); route(); }
-      catch (err) { toast(translateError(err.message), 'bad'); }
+      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, age: +fd.get('age') || null, nationality: fd.get('nationality').trim() || null, residence: fd.get('residence').trim() || null, active: t ? !!fd.get('active') : true };
+      const shown = $$('[name=tc_circle]', m).map((x) => +x.value);
+      const picked = new Set(fd.getAll('tc_circle').map(Number));
+      try {
+        const saved = t ? await api.update('teachers', t.id, row) : await api.insert('teachers', row);
+        const tid = t ? t.id : saved.id;
+        for (const cid of shown) {
+          const had = mine.includes(cid);
+          if (picked.has(cid) && !had) await api.setCircleTeacher(cid, tid);
+          if (!picked.has(cid) && had) await api.setCircleTeacher(cid, null);
+        }
+        await loadAll(); close(); toast(t ? 'حُفظت بيانات المعلِّمة 🌸' : 'أُضيفت المعلِّمة 🌸', 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); }
     };
     const d = m.querySelector('#delTc'); if (d) d.onclick = async () => {
       close();
