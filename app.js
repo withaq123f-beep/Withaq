@@ -11,7 +11,6 @@ const SITE = {
 };
 const LOGO = 'assets/logo.png';
 const MARK = 'assets/mark.png';
-const USER_DOMAIN = 'withaq.app'; // يُحوَّل اسم المستخدمة إلى بريد داخلي لا يُرسَل إليه شيء
 
 /* ---------------- السور وعدد آياتها ---------------- */
 const SURAHS = [
@@ -155,10 +154,12 @@ function downloadCSV(name, header, rows) {
 function translateError(msg = '') {
   const m = String(msg).toLowerCase();
   if (m.includes('row-level security') || m.includes('permission')) return 'ليست لديكِ صلاحية لهذا الإجراء';
-  if (m.includes('already registered') || m.includes('duplicate key') && m.includes('username')) return 'اسم المستخدمة محجوز، اختاري اسمًا آخر';
+  if (m.includes('already registered') || m.includes('duplicate key') && m.includes('username')) return 'هذا البريد مسجَّل مسبقًا، سجِّلي الدخول';
   if (m.includes('duplicate key')) return 'هذا السجل موجود مسبقًا';
   if (m.includes('foreign key')) return 'لا يمكن الحذف لوجود بيانات مرتبطة به';
   if (m.includes('password')) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
+  if (m.includes('invalid') && m.includes('email')) return 'اكتبي بريدًا إلكترونيًّا صحيحًا';
+  if (m.includes('rate limit')) return 'محاولات كثيرة، انتظري قليلًا ثم أعيدي';
   if (m.includes('failed to fetch') || m.includes('network')) return 'تعذَّر الاتصال، تأكدي من الإنترنت';
   return msg || 'حدث خطأ غير متوقع';
 }
@@ -176,7 +177,7 @@ function applyFilters(rows, f = {}) {
 
 function supabaseBackend() {
   let sb;
-  const email = (u) => `${String(u).trim().toLowerCase()}@${USER_DOMAIN}`;
+  const email = (u) => String(u).trim().toLowerCase();
   const run = async (p) => { const { data, error } = await p; if (error) throw new Error(translateError(error.message)); return data; };
   const loadScript = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('تعذَّر تحميل مكتبة Supabase')); document.head.appendChild(s); });
   return {
@@ -192,12 +193,12 @@ function supabaseBackend() {
     },
     async signIn(u, p) {
       const { error } = await sb.auth.signInWithPassword({ email: email(u), password: p });
-      if (error) throw new Error('اسم المستخدمة أو كلمة المرور غير صحيحة');
+      if (error) throw new Error(/confirm/i.test(error.message) ? 'أكِّدي بريدكِ أولًا من الرابط الذي وصلكِ، ثم ادخلي' : 'البريد أو كلمة المرور غير صحيحة');
     },
     async signUp(name, u, p, requested) {
-      const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, username: String(u).trim().toLowerCase(), requested_role: requested || null } } });
+      const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null }, emailRedirectTo: location.origin + location.pathname } });
       if (error) throw new Error(translateError(error.message));
-      if (!data.session) throw new Error('أُنشئ الحساب، لكن تأكيد البريد مفعَّل في Supabase — أوقفيه من الإعدادات ثم سجِّلي الدخول');
+      if (!data.session) return 'confirm'; // التأكيد مفعَّل: وصلها رابط على بريدها
     },
     signOut: () => sb.auth.signOut(),
     async changePassword(p) { await run(sb.auth.updateUser({ password: p })); },
@@ -348,7 +349,7 @@ const attTag = (a) => `<span class="tag ${a === 'present' ? 'olive' : a === 'abs
 /* =========================================================
    الدخول
    ========================================================= */
-function renderAuth(mode = 'login', error = '') {
+function renderAuth(mode = 'login', error = '', info = '') {
   $('#app').innerHTML = `
   <div class="gate">
     <section class="gate-art"><div class="frame"></div>
@@ -362,9 +363,10 @@ function renderAuth(mode = 'login', error = '') {
         ${mode === 'signup' ? `<label class="field">الاسم الكامل<input class="input" name="name" required></label>
         <label class="field">نوع الحساب<select class="input" name="requested" required>
           <option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>` : ''}
-        <label class="field">اسم المستخدمة<input class="input" name="username" required dir="ltr" autocomplete="username" pattern="[A-Za-z0-9_.\\-]{3,}" title="حروف إنجليزية أو أرقام، 3 أحرف على الأقل"></label>
+        <label class="field">البريد الإلكتروني<input class="input" name="username" type="email" required dir="ltr" autocomplete="email" inputmode="email"></label>
         <label class="field">كلمة المرور<input class="input" name="password" type="password" required minlength="6" dir="ltr" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
         ${error ? `<div class="error" role="alert">${esc(error)}</div>` : ''}
+        ${info ? `<div class="banner" role="status" style="margin:0">${esc(info)}</div>` : ''}
         <button class="btn block" type="submit">${mode === 'login' ? 'دخول' : 'إنشاء الحساب'}</button>
       </form>
       <p class="switch-line">${mode === 'login' ? 'ليس لديكِ حساب؟<button class="linkish" data-mode="signup">أنشئي حسابًا</button>' : 'لديكِ حساب؟<button class="linkish" data-mode="login">سجِّلي الدخول</button>'}</p>
@@ -377,8 +379,10 @@ function renderAuth(mode = 'login', error = '') {
     const fd = new FormData(e.target); const btn = e.target.querySelector('button[type=submit]');
     btn.disabled = true;
     try {
-      if (mode === 'signup') await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'));
-      else await api.signIn(fd.get('username'), fd.get('password'));
+      if (mode === 'signup') {
+        const r = await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'));
+        if (r === 'confirm') { renderAuth('login', '', 'أُنشئ حسابكِ 🌸 افتحي رابط التأكيد الذي وصل إلى بريدكِ، ثم ادخلي.'); return; }
+      } else await api.signIn(fd.get('username'), fd.get('password'));
       start();
     } catch (err) { renderAuth(mode, err.message); }
   };
@@ -944,7 +948,7 @@ PAGES.staff = async (v) => {
 
   v.innerHTML = `<div class="wrap">${cartouche('الكادر', 'الحسابات وحضور مشرفات الحلقات')}
   ${isAdmin() && pending.length ? `<section class="sheet"><h2>بانتظار التفعيل <small>${pending.length}</small></h2><div class="lines">
-    ${pending.map((p) => `<div class="line"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s"><span dir="ltr">@${esc(p.username)}</span>${p.requested_role ? `، ${ROLE[p.requested_role] || ''}` : ''}</div></div><button class="btn sm" data-edit="${esc(p.id)}">تفعيل</button></div>`).join('')}
+    ${pending.map((p) => `<div class="line"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s"><span dir="ltr">${esc(p.username)}</span>${p.requested_role ? `، ${ROLE[p.requested_role] || ''}` : ''}</div></div><button class="btn sm" data-edit="${esc(p.id)}">تفعيل</button></div>`).join('')}
   </div></section>` : ''}
   <section class="sheet"><h2>حضور مشرفات الحلقات</h2>
     <label class="field" style="max-width:220px;margin-bottom:12px">اليوم<input class="input" type="date" id="sDate" value="${STF.date}" max="${today()}"></label>
@@ -1346,7 +1350,7 @@ PAGES.account = async (v) => {
   const mine = S.circles.filter((c) => c.teacher_id === S.me.id);
   v.innerHTML = `<div class="wrap">${cartouche('حسابي')}
   <section class="sheet"><div class="profile"><span class="initial lg">${esc(initial(S.me.full_name))}</span>
-    <div class="grow"><h2>${esc(S.me.full_name)}</h2><div style="color:var(--ink-3)" dir="ltr">@${esc(S.me.username)}</div></div></div>
+    <div class="grow"><h2>${esc(S.me.full_name)}</h2><div style="color:var(--ink-3)" dir="ltr">${esc(S.me.username)}</div></div></div>
     <dl class="facts"><div><dt>الدور</dt><dd>${ROLE[role()]}</dd></div>
       ${isSup() ? `<div><dt>المسار</dt><dd>${esc(trackName(S.me.track_id))}</dd></div>` : ''}
       ${mine.length ? `<div><dt>حلقاتي</dt><dd>${esc(mine.map((c) => c.name).join('، '))}</dd></div>` : ''}</dl></section>

@@ -222,22 +222,21 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- إنشاء ملف تلقائي عند التسجيل. أوَّل حساب يُنشأ يصبح مديرة المقرأة.
+-- الدخول بالبريد الإلكتروني، ودور القائدة محجوز لبريد القائدة فقط (غيِّريه لمقرأة أخرى)
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare
-  first_user boolean;
 begin
-  select not exists (select 1 from public.profiles) into first_user;
   insert into public.profiles (id, full_name, username, role, requested_role)
   values (
     new.id,
-    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
-    coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
-    case when first_user then 'admin' else 'pending' end,
+    coalesce(nullif(new.raw_user_meta_data->>'full_name', ''), split_part(new.email, '@', 1)),
+    lower(new.email),
+    case when lower(new.email) = 'withaq123f@gmail.com' then 'admin' else 'pending' end,
     new.raw_user_meta_data->>'requested_role'
   );
   return new;
 end $$;
+revoke execute on function public.handle_new_user() from public, anon, authenticated;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
