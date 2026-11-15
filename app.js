@@ -86,7 +86,7 @@ function timeLeft(d) {
   return h ? `${h} ساعة و${m} دقيقة` : `${m} دقيقة`;
 }
 const GRADE = { excellent: 'ممتاز', good: 'جيد', repeat: 'تحتاج إعادة' };
-const ROLE = { admin: 'القائدة', supervisor: 'مسؤولة مسار', teacher: 'مشرفة حلقة', instructor: 'معلِّمة حلقة', student: 'طالبة', pending: 'بانتظار التفعيل', disabled: 'موقوفة' };
+const ROLE = { admin: 'القائدة', supervisor: 'مسؤولة مسار', teacher: 'مشرفة حلقة', instructor: 'معلِّمة حلقة', student: 'طالبة', pending: 'بانتظار التفعيل', disabled: 'مؤرشفة' };
 const ACTIVE_ROLES = ['admin', 'supervisor', 'teacher']; // المعلِّمات والطالبات بلا حسابات، بياناتهن في القاعدة
 
 /* ---------------- أدوات عامة ---------------- */
@@ -196,7 +196,7 @@ function supabaseBackend() {
       if (error) throw new Error(/confirm/i.test(error.message) ? 'أكِّدي بريدكِ أولًا من الرابط الذي وصلكِ، ثم ادخلي' : 'البريد أو كلمة المرور غير صحيحة');
     },
     signupOptions: () => run(sb.rpc('signup_options')),
-    deleteAccount: (uid) => run(sb.rpc('admin_delete_account', { uid })),
+    archiveAccount: (uid, archive) => run(sb.rpc('set_account_archived', { uid, archive })),
     setCircleTeacher: (cid, tid) => run(sb.rpc('set_circle_teacher', { cid, tid })),
     async signUp(name, u, p, requested, track, circles) {
       const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null, requested_track: track ? String(track) : null, requested_circles: (circles || []).map(String) }, emailRedirectTo: location.origin + location.pathname } });
@@ -267,8 +267,10 @@ const activeEnrollments = (circleIds) => {
 function visibleStudents() {
   if (isAdmin()) return S.students;
   if (isStu()) return S.students.filter((s) => s.id === S.me.student_id);
-  const ids = new Set(activeEnrollments(myCircles().map((c) => c.id)).map((e) => e.student_id));
-  return S.students.filter((s) => ids.has(s.id));
+  const mine = new Set(myCircles(true).map((c) => c.id));
+  const ids = new Set(S.enrollments.filter((e) => mine.has(e.circle_id) && e.active).map((e) => e.student_id));
+  const past = new Set(S.enrollments.filter((e) => mine.has(e.circle_id)).map((e) => e.student_id));
+  return S.students.filter((s) => ids.has(s.id) || (!s.active && past.has(s.id)));
 }
 const studentCircles = (sid) => S.enrollments.filter((e) => e.student_id === sid && e.active).map((e) => circleById(e.circle_id)).filter(Boolean);
 
@@ -747,18 +749,19 @@ PAGES.students = async (v) => {
   v.innerHTML = `<div class="wrap">${cartouche('الطالبات', '<span id="stuCount"></span>')}
   <div class="toolbar">
     <input class="input" id="stuQ" type="search" placeholder="ابحثي بالاسم أو الهاتف" value="${esc(STU.q)}" aria-label="بحث">
-    <select class="input" id="stuC" aria-label="الحلقة"><option value="">كل الحلقات</option>${circles.map((c) => `<option value="${c.id}"${+STU.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}${isAdmin() ? `<option value="none"${STU.circle === 'none' ? ' selected' : ''}>بلا حلقة</option>` : ''}</select>
+    <select class="input" id="stuC" aria-label="الحلقة"><option value="">كل الحلقات</option>${circles.map((c) => `<option value="${c.id}"${+STU.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}<option value="archive"${STU.circle === 'archive' ? ' selected' : ''}>الأرشيف</option>${isAdmin() ? `<option value="none"${STU.circle === 'none' ? ' selected' : ''}>بلا حلقة</option>` : ''}</select>
     ${canEditStudents() ? '<div class="end"><button class="btn" id="addStu">إضافة طالبة</button></div>' : ''}
   </div>
   <section class="sheet"><div class="lines" id="stuList"></div></section></div>`;
   const draw = () => {
-    let list = visibleStudents();
-    if (STU.circle === 'none') list = list.filter((s) => !studentCircles(s.id).length);
+    let list = visibleStudents().filter((s) => STU.circle === 'archive' ? !s.active : s.active);
+    if (STU.circle === 'archive') { /* المؤرشفات فقط */ }
+    else if (STU.circle === 'none') list = list.filter((s) => !studentCircles(s.id).length);
     else if (STU.circle) list = list.filter((s) => studentCircles(s.id).some((c) => c.id === +STU.circle));
     if (STU.q) list = list.filter((s) => s.full_name.includes(STU.q) || (s.phone || '').includes(STU.q));
     $('#stuList').innerHTML = list.map((s) => `<a class="line" href="#/student/${s.id}"><span class="initial">${esc(initial(s.full_name))}</span>
       <div class="grow"><div class="t">${esc(s.full_name)}</div><div class="s">${esc(studentCircles(s.id).map((c) => c.name).join('، ') || 'بلا حلقة')}</div></div>
-      ${s.active ? '' : '<span class="tag gray">غير نشطة</span>'}</a>`).join('') || '<div class="empty">لا نتائج. جرِّبي اسمًا آخر.</div>';
+      ${s.active ? '' : '<span class="tag gray">مؤرشفة</span>'}</a>`).join('') || `<div class="empty">${STU.circle === 'archive' ? 'الأرشيف فارغ' : 'لا نتائج. جرِّبي اسمًا آخر.'}</div>`;
     $('#stuCount').textContent = `${list.length} طالبة`;
   };
   draw();
@@ -801,7 +804,6 @@ function studentForm(s = null) {
       <label class="field">البلد<input class="input" name="nationality" list="countries" value="${esc(s?.nationality)}"></label>
       <label class="field">بلد الإقامة<input class="input" name="residence" list="countries" value="${esc(s?.residence)}"></label>
       ${s ? '' : trackCircleFields({ selected: STU.circle && STU.circle !== 'none' ? [+STU.circle] : [] })}
-      ${s ? `<label class="check full"><input type="checkbox" name="active"${s.active ? ' checked' : ''}> طالبة نشطة</label>` : ''}
       <div class="actions full"><button class="btn" type="submit">${s ? 'حفظ التعديل' : 'إضافة الطالبة'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
     wireTrackCircle(m);
@@ -809,7 +811,6 @@ function studentForm(s = null) {
       e.preventDefault();
       const fd = new FormData(e.target);
       const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, age: +fd.get('age') || null, nationality: fd.get('nationality').trim() || null, residence: fd.get('residence').trim() || null };
-      if (s) row.active = !!fd.get('active');
       try {
         if (s) await api.update('students', s.id, row);
         else {
@@ -851,7 +852,7 @@ PAGES.student = async (v, arg) => {
     <div class="profile"><span class="initial lg rose">${esc(initial(s.full_name))}</span>
       <div class="grow"><h2>${esc(s.full_name)}</h2>
         <div class="choices">${studentCircles(s.id).map((c) => `<span class="tag rose">${esc(c.name)}</span>`).join('') || '<span class="tag gray">بلا حلقة</span>'}${s.active ? '' : '<span class="tag gray">غير نشطة</span>'}</div></div>
-      ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}${isAdmin() ? '<button class="btn sm danger" id="delStu">حذف الطالبة</button>' : ''}</div>
+      ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}${editable ? (s.active ? '<button class="btn sm danger" id="arcStu">أرشفة</button>' : '<button class="btn sm" id="arcStu">إرجاع من الأرشيف</button>') : ''}</div>
     <dl class="facts">
       <div><dt>هاتف الطالبة</dt><dd dir="ltr" style="text-align:right">${esc(s.phone || '—')}</dd></div>
       <div><dt>العمر</dt><dd>${s.age ? `${s.age} سنة` : '—'}</dd></div>
@@ -891,9 +892,22 @@ PAGES.student = async (v, arg) => {
   </div></section></div>`;
 
   const ed = $('#editStu'); if (ed) ed.onclick = () => studentForm(s);
-  const ds = $('#delStu'); if (ds) ds.onclick = async () => {
-    if (!(await confirmBox(`حذف ${s.full_name} نهائيًّا مع كل سجلاتها؟ لا يمكن التراجع. (إن كانت انقطعت فقط، فالأفضل إلغاء «طالبة نشطة» من تعديل البيانات.)`, 'حذف'))) return;
-    try { await api.remove('students', s.id); await loadAll(); toast('حُذفت الطالبة', 'ok'); location.hash = '#/students'; } catch (err) { toast(translateError(err.message), 'bad'); }
+  const ar = $('#arcStu'); if (ar) ar.onclick = async () => {
+    try {
+      if (s.active) {
+        if (!(await confirmBox(`أرشفة ${s.full_name}؟ تخرج من حلقتها وقوائم الإدخال، وتبقى بياناتها وسجلاتها، ويمكن إرجاعها متى شئتِ.`, 'أرشفة'))) return;
+        for (const e of S.enrollments.filter((x) => x.student_id === s.id && x.active)) await api.update('enrollments', e.id, { active: false, ended_at: today() });
+        await api.update('students', s.id, { active: false });
+        toast('أُرشفت الطالبة', 'ok');
+      } else {
+        await api.update('students', s.id, { active: true });
+        const last = S.enrollments.filter((x) => x.student_id === s.id).sort((a, b) => String(b.ended_at || '').localeCompare(String(a.ended_at || '')) || b.id - a.id)[0];
+        const back = last && myCircles().some((c) => c.id === last.circle_id);
+        if (back) await api.insert('enrollments', { student_id: s.id, circle_id: last.circle_id, active: true, started_at: today() });
+        toast(back ? `رجعت إلى ${circleById(last.circle_id)?.name} 🌸` : 'رجعت من الأرشيف 🌸 أضيفيها إلى حلقة', 'ok');
+      }
+      await loadAll(); route();
+    } catch (err) { toast(translateError(err.message), 'bad'); }
   };
   const activeIds = enrs.filter((e) => e.active).map((e) => e.circle_id);
   const pickCircle = (title, onPick) => {
@@ -994,7 +1008,10 @@ const STF = { date: null };
 PAGES.staff = async (v) => {
   STF.date = STF.date || today();
   const pending = S.profiles.filter((p) => p.role === 'pending');
-  const staff = S.profiles.filter((p) => p.role !== 'pending' && p.role !== 'student').sort(byName);
+  const staff = S.profiles.filter((p) => !['pending', 'student', 'disabled'].includes(p.role)).sort(byName);
+  const archived = S.profiles.filter((p) => p.role === 'disabled').sort(byName);
+  const leadSups = isSup() ? S.profiles.filter((p) => p.role === 'teacher' && S.circles.some((c) => c.teacher_id === p.id) && S.circles.filter((c) => c.teacher_id === p.id).every((c) => c.track_id === S.me.track_id)).sort(byName) : [];
+  const leadArch = isSup() ? archived.filter((p) => p.archived_track === S.me.track_id && ['teacher', 'pending', null, undefined].includes(p.archived_role)) : [];
   const teachers = isAdmin()
     ? S.profiles.filter((p) => p.role === 'teacher' || (!['pending', 'disabled'].includes(p.role) && S.circles.some((c) => c.teacher_id === p.id))).sort(byName)
     : [...new Set(myCircles().map((c) => c.teacher_id).filter(Boolean))].map((id) => S.profiles.find((p) => p.id === id)).filter(Boolean).sort(byName);
@@ -1018,13 +1035,19 @@ PAGES.staff = async (v) => {
     ${staff.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
       <div class="s">${p.role === 'supervisor' ? esc(trackName(p.track_id)) : esc(circlesOf(p.id) || '—')}</div></div>
       <span class="tag ${p.role === 'admin' ? 'rose' : p.role === 'supervisor' ? 'olive' : p.role === 'disabled' ? 'gray' : p.role === 'instructor' ? 'blue' : 'amber'}">${ROLE[p.role]}</span></button>`).join('')}
+    ${archived.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--ink-3)">الأرشيف (${archived.length})</summary><div class="lines">${archived.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s">${esc(ROLE[p.archived_role] || '')}</div></div><span class="tag gray">مؤرشفة</span></button>`).join('')}</div></details>` : ''}
   </div></section>
   ` : ''}
-  <section class="sheet"><h2>معلِّمات الحلقات <small>${S.teachers.length}، بلا حسابات دخول</small></h2>
+  ${isSup() ? `<section class="sheet"><h2>مشرفات حلقات مساري <small>${leadSups.length}</small></h2><div class="lines">
+    ${leadSups.map((p) => `<div class="line"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s">${esc(circlesOf(p.id) || '—')}</div></div><button class="btn sm danger" data-arc="${esc(p.id)}">أرشفة</button></div>`).join('') || '<div class="empty">لا مشرفات في مساركِ</div>'}
+    ${leadArch.length ? `<h3 style="margin:14px 0 6px;font-size:.95rem;color:var(--ink-3)">الأرشيف</h3>${leadArch.map((p) => `<div class="line"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div></div><button class="btn sm" data-arc="${esc(p.id)}">إرجاع</button></div>`).join('')}` : ''}
+  </div></section>` : ''}
+  <section class="sheet"><h2>معلِّمات الحلقات <small>${S.teachers.filter((t) => t.active).length}، بلا حسابات دخول</small></h2>
     ${isAdmin() || isSup() ? '<button class="btn sm quiet" id="addTeacher" style="margin-bottom:8px">إضافة معلِّمة</button>' : ''}
-    <div class="lines">${S.teachers.map((t) => { const cs = S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.name);
+    <div class="lines">${S.teachers.filter((t) => t.active).map((t) => { const cs = S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.name);
       return `<button class="line" data-teacher="${t.id}"><span class="initial">${esc(initial(t.full_name))}</span><div class="grow"><div class="t">${esc(t.full_name)}</div>
-      <div class="s">${esc(cs.join('، ') || 'بلا حلقة')}${t.residence ? `، ${esc(t.residence)}` : ''}${t.phone ? `، <span dir="ltr">${esc(t.phone)}</span>` : ''}</div></div>${t.active ? '' : '<span class="tag gray">متوقفة</span>'}</button>`; }).join('') || '<div class="empty">لم تُضف معلِّمات بعد</div>'}</div>
+      <div class="s">${esc(cs.join('، ') || 'بلا حلقة')}${t.residence ? `، ${esc(t.residence)}` : ''}${t.phone ? `، <span dir="ltr">${esc(t.phone)}</span>` : ''}</div></div></button>`; }).join('') || '<div class="empty">لم تُضف معلِّمات بعد</div>'}</div>
+    ${S.teachers.some((t) => !t.active) ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--ink-3)">الأرشيف (${S.teachers.filter((t) => !t.active).length})</summary><div class="lines">${S.teachers.filter((t) => !t.active).map((t) => `<button class="line" data-teacher="${t.id}"><span class="initial">${esc(initial(t.full_name))}</span><div class="grow"><div class="t">${esc(t.full_name)}</div></div><span class="tag gray">مؤرشفة</span></button>`).join('')}</div></details>` : ''}
   </section></div>`;
 
   $('#sDate').onchange = (e) => { if (e.target.value) { STF.date = e.target.value; route(); } };
@@ -1041,12 +1064,24 @@ PAGES.staff = async (v) => {
     try { await api.upsert('staff_attendance', rows, 'profile_id,record_date'); toast('حُفظ الحضور 🌿', 'ok'); route(); }
     catch (err) { toast(translateError(err.message), 'bad'); sv.disabled = false; }
   };
+  $$('[data-arc]', v).forEach((b) => (b.onclick = () => archiveAccount(S.profiles.find((p) => p.id === b.dataset.arc))));
   $$('[data-edit]', v).forEach((b) => (b.onclick = () => profileForm(S.profiles.find((p) => p.id === b.dataset.edit))));
   const at = $('#addTeacher'); if (at) at.onclick = () => teacherForm();
   $$('[data-teacher]', v).forEach((b) => (b.onclick = () => { if (isAdmin() || isSup()) teacherForm(teacherById(+b.dataset.teacher)); }));
 };
 
+async function archiveRestorePrompt(p) {
+  if (await confirmBox(`حساب ${p.full_name} في الأرشيف${p.archived_role ? ` (كانت ${ROLE[p.archived_role] || ''})` : ''}. إرجاعه؟`, 'إرجاع من الأرشيف')) archiveAccount(p);
+}
+async function archiveAccount(p) {
+  const on = p.role !== 'disabled';
+  if (on && !(await confirmBox(`أرشفة حساب ${p.full_name}؟ لن تستطيع الدخول، وتبقى بياناتها وسجلاتها، وتصير حلقاتها شاغرة. يمكن إرجاعها متى شئتِ.`, 'أرشفة'))) return;
+  try { await api.archiveAccount(p.id, on); await loadAll(); toast(on ? 'أُرشف الحساب' : 'رجع الحساب 🌸', 'ok'); route(); }
+  catch (err) { toast(translateError(err.message), 'bad'); }
+}
+
 function profileForm(p) {
+  if (p.role === 'disabled') { archiveRestorePrompt(p); return; }
   const self = p.id === S.me.id;
   const initialRole = p.role === 'pending' ? (['teacher', 'supervisor'].includes(p.requested_role) ? p.requested_role : 'teacher') : p.role;
   modal(`<h2>${p.role === 'pending' ? 'تفعيل الحساب' : 'بيانات الحساب'}</h2>
@@ -1054,20 +1089,16 @@ function profileForm(p) {
       <label class="field full">الاسم<input class="input" name="full_name" required value="${esc(p.full_name)}"></label>
       ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b>${p.requested_role === 'supervisor' && p.track_id ? `، مسار ${esc(trackName(p.track_id))}` : ''}${(p.requested_circles || []).length ? `، الحلقات: ${esc(p.requested_circles.map((id) => circleById(+id)?.name).filter(Boolean).join('، '))}` : ''}</p>` : ''}
       ${S.circles.some((c) => c.teacher_id === p.id) ? `<p class="full" style="color:var(--olive-deep);font-size:.88rem">مربوطة بحلقات: ${esc(S.circles.filter((c) => c.teacher_id === p.id).map((c) => c.name).join('، '))}</p>` : ''}
-      <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
+      <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
       <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
-      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${!self && isAdmin() ? `<button class="btn danger" type="button" id="delAcc">${p.role === 'pending' ? 'رفض وحذف' : 'حذف الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
+      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${!self && isAdmin() ? `<button class="btn danger" type="button" id="arcAcc">${p.role === 'pending' ? 'رفض وأرشفة' : 'أرشفة الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
     const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const hint = m.querySelector('#roleHint');
     const HINTS = { teacher: 'تُسنَد حلقاتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب والسرد.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
     const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); hint.textContent = HINTS[rs.value] || ''; };
     rs.onchange = sync; sync();
-    const da = m.querySelector('#delAcc'); if (da) da.onclick = async () => {
-      close();
-      if (!(await confirmBox(`حذف حساب ${p.full_name} نهائيًّا؟ لن تستطيع الدخول، وتبقى السجلات التي أدخلتها، وتصير حلقاتها بلا مشرفة. لا يمكن التراجع.`, 'حذف'))) return;
-      try { await api.deleteAccount(p.id); await loadAll(); toast('حُذف الحساب', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
-    };
+    const da = m.querySelector('#arcAcc'); if (da) da.onclick = async () => { close(); archiveAccount(p); };
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
       const patch = { full_name: fd.get('full_name').trim() };
@@ -1080,6 +1111,8 @@ function profileForm(p) {
 }
 
 // معلِّمات الحلقات: بيانات فقط بلا حسابات دخول
+// مسؤولة المسار تؤرشف معلِّمة حلقات مسارها فقط
+const canArchiveTeacher = (t) => isAdmin() || (isSup() && S.circles.filter((c) => c.teacher_ref === t.id).every((c) => c.track_id === S.me.track_id));
 function teacherForm(t = null) {
   const mine = t ? S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.id) : [];
   modal(`<h2>${t ? 'بيانات المعلِّمة' : 'معلِّمة جديدة'}</h2>
@@ -1090,13 +1123,12 @@ function teacherForm(t = null) {
       <label class="field">البلد<input class="input" name="nationality" list="countries" value="${esc(t?.nationality)}"></label>
       <label class="field">بلد الإقامة<input class="input" name="residence" list="countries" value="${esc(t?.residence)}"></label>
       ${trackCircleFields({ multi: true, selected: mine, current: t?.id })}
-      ${t ? `<label class="check full"><input type="checkbox" name="active"${t.active ? ' checked' : ''}> على رأس العمل</label>` : ''}
-      <div class="actions full"><button class="btn" type="submit">${t ? 'حفظ' : 'إضافة المعلِّمة'}</button>${t && isAdmin() ? '<button class="btn danger" type="button" id="delTc">حذف</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
+      <div class="actions full"><button class="btn" type="submit">${t ? 'حفظ' : 'إضافة المعلِّمة'}</button>${t && canArchiveTeacher(t) ? `<button class="btn ${t.active ? 'danger' : ''}" type="button" id="arcTc">${t.active ? 'أرشفة' : 'إرجاع من الأرشيف'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
     wireTrackCircle(m);
     m.querySelector('#tcf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
-      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, age: +fd.get('age') || null, nationality: fd.get('nationality').trim() || null, residence: fd.get('residence').trim() || null, active: t ? !!fd.get('active') : true };
+      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, age: +fd.get('age') || null, nationality: fd.get('nationality').trim() || null, residence: fd.get('residence').trim() || null, active: t ? t.active : true };
       const shown = $$('[name=tc_circle]', m).map((x) => +x.value);
       const picked = new Set(fd.getAll('tc_circle').map(Number));
       try {
@@ -1110,11 +1142,15 @@ function teacherForm(t = null) {
         await loadAll(); close(); toast(t ? 'حُفظت بيانات المعلِّمة 🌸' : 'أُضيفت المعلِّمة 🌸', 'ok'); route();
       } catch (err) { toast(translateError(err.message), 'bad'); }
     };
-    const d = m.querySelector('#delTc'); if (d) d.onclick = async () => {
+    const d = m.querySelector('#arcTc'); if (d) d.onclick = async () => {
       close();
-      const n = S.circles.filter((c) => c.teacher_ref === t.id).length;
-      if (!(await confirmBox(n ? `حذف ${t.full_name}؟ ستبقى ${n} حلقة بلا معلِّمة.` : `حذف ${t.full_name}؟`, 'حذف'))) return;
-      try { await api.remove('teachers', t.id); await loadAll(); toast('حُذفت', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+      const mineCs = S.circles.filter((c) => c.teacher_ref === t.id);
+      if (t.active && !(await confirmBox(`أرشفة ${t.full_name}؟ تبقى بياناتها${mineCs.length ? `، وتصير ${mineCs.length} حلقة بلا معلِّمة` : ''}. يمكن إرجاعها متى شئتِ.`, 'أرشفة'))) return;
+      try {
+        if (t.active) for (const c of mineCs) await api.setCircleTeacher(c.id, null);
+        await api.update('teachers', t.id, { active: !t.active });
+        await loadAll(); toast(t.active ? 'أُرشفت المعلِّمة' : 'رجعت المعلِّمة 🌸', 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); }
     };
   });
 }
@@ -1410,11 +1446,11 @@ PAGES.sard = async (v) => {
   };
   $$('[data-remove]', v).forEach((b) => (b.onclick = async () => {
     const st = studentById(+b.dataset.remove);
-    if (!(await confirmBox(`حذف ${st.full_name} من المقرأة؟ يُنهى التحاقها بحلقاتها وتصير غير نشطة، ويبقى سجلُّها محفوظًا.`, 'حذفها من المقرأة'))) return;
+    if (!(await confirmBox(`أرشفة ${st.full_name}؟ تخرج من حلقتها، وتبقى بياناتها وسجلاتها في الأرشيف.`, 'أرشفة'))) return;
     try {
       for (const e of S.enrollments.filter((x) => x.student_id === st.id && x.active)) await api.update('enrollments', e.id, { active: false, ended_at: today() });
-      await api.update('students', st.id, { active: false, notes: [st.notes, `حُذفت لعدم السرد أسبوعين متتاليين (${fmtShort(today())})`].filter(Boolean).join('\n') });
-      await loadAll(); toast('حُذفت من المقرأة', 'ok'); route();
+      await api.update('students', st.id, { active: false, notes: [st.notes, `أُرشفت لعدم السرد أسبوعين متتاليين (${fmtShort(today())})`].filter(Boolean).join('\n') });
+      await loadAll(); toast('أُرشفت', 'ok'); route();
     } catch (err) { toast(translateError(err.message), 'bad'); }
   }));
 };

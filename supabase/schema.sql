@@ -320,8 +320,6 @@ drop policy if exists profiles_update_self on public.profiles;
 create policy profiles_update_self on public.profiles for update
   using (id = auth.uid() or public.is_admin());
 drop policy if exists profiles_delete on public.profiles;
-create policy profiles_delete on public.profiles for delete
-  using (public.is_admin());
 
 -- المسارات والحلقات: يقرؤها الكادر، وتديرها المديرة
 drop policy if exists tracks_select on public.tracks;
@@ -349,7 +347,6 @@ drop policy if exists students_update on public.students;
 create policy students_update on public.students for update
   using (public.my_role() in ('admin','supervisor'));
 drop policy if exists students_delete on public.students;
-create policy students_delete on public.students for delete using (public.is_admin());
 
 -- الالتحاق
 drop policy if exists enroll_select on public.enrollments;
@@ -427,16 +424,64 @@ end $$;
 revoke execute on function public.set_circle_teacher(bigint, bigint) from public, anon;
 grant execute on function public.set_circle_teacher(bigint, bigint) to authenticated;
 
--- حذف حساب مشرفة أو مسؤولة مسار: للقائدة فقط، ولا تحذف نفسها
-create or replace function public.admin_delete_account(uid uuid) returns void
-language plpgsql security definer set search_path = public, auth as $$
+-- لا حذف نهائي: أرشفة فقط
+drop policy if exists students_delete on public.students;
+drop policy if exists teachers_delete on public.teachers;
+drop policy if exists profiles_delete on public.profiles;
+alter table public.profiles add column if not exists archived_role text;
+alter table public.profiles add column if not exists archived_track bigint references public.tracks(id) on delete set null;
+
+create or replace function public.protect_profile_role() returns trigger
+language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_admin() then raise exception 'permission denied'; end if;
-  if uid = auth.uid() then raise exception 'cannot delete yourself'; end if;
-  delete from auth.users where id = uid;
+  if not public.is_admin() and coalesce(current_setting('withaq.bypass', true), '') <> '1' then
+    new.role := old.role; new.track_id := old.track_id; new.student_id := old.student_id;
+    new.archived_role := old.archived_role; new.archived_track := old.archived_track;
+  end if;
+  return new;
 end $$;
-revoke execute on function public.admin_delete_account(uuid) from public, anon;
-grant execute on function public.admin_delete_account(uuid) to authenticated;
+revoke execute on function public.protect_profile_role() from public, anon, authenticated;
+
+-- أرشفة حساب أو إرجاعه: القائدة لأي حساب غيرها، ومسؤولة المسار لمشرفات حلقات مسارها فقط
+create or replace function public.set_account_archived(uid uuid, archive boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  t public.profiles%rowtype;
+  me_role text := public.my_role();
+  me_track bigint := public.my_track();
+  their_track bigint;
+begin
+  select * into t from public.profiles where id = uid;
+  if not found then raise exception 'not found'; end if;
+  if uid = auth.uid() then raise exception 'cannot archive yourself'; end if;
+  select c.track_id into their_track from public.circles c where c.teacher_id = uid limit 1;
+  if me_role = 'admin' then null;
+  elsif me_role = 'supervisor' then
+    if archive then
+      -- كل حلقاتها في مسار مسؤولة المسار
+      if not (t.role in ('teacher', 'pending')
+              and exists (select 1 from public.circles c where c.teacher_id = uid and c.track_id = me_track)
+              and not exists (select 1 from public.circles c where c.teacher_id = uid and c.track_id is distinct from me_track))
+      then raise exception 'permission denied'; end if;
+      their_track := me_track;
+    else
+      if not (t.role = 'disabled' and t.archived_track = me_track and coalesce(t.archived_role, 'teacher') in ('teacher', 'pending')) then raise exception 'permission denied'; end if;
+    end if;
+  else raise exception 'permission denied';
+  end if;
+  perform set_config('withaq.bypass', '1', true);
+  if archive then
+    if t.role <> 'disabled' then
+      update public.profiles set archived_role = t.role, archived_track = coalesce(their_track, t.track_id, me_track), role = 'disabled' where id = uid;
+      update public.circles set teacher_id = null where teacher_id = uid;
+    end if;
+  elsif t.role = 'disabled' then
+    update public.profiles set role = coalesce(t.archived_role, 'pending'), archived_role = null, archived_track = null where id = uid;
+  end if;
+  perform set_config('withaq.bypass', '', true);
+end $$;
+revoke execute on function public.set_account_archived(uuid, boolean) from public, anon;
+grant execute on function public.set_account_archived(uuid, boolean) to authenticated;
 
 -- =====================================================================
 --  المسارات والحلقات الابتدائية (تُضاف مرة واحدة إذا كانت القاعدة فارغة)
