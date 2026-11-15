@@ -196,6 +196,7 @@ function supabaseBackend() {
       if (error) throw new Error(/confirm/i.test(error.message) ? 'أكِّدي بريدكِ أولًا من الرابط الذي وصلكِ، ثم ادخلي' : 'البريد أو كلمة المرور غير صحيحة');
     },
     signupOptions: () => run(sb.rpc('signup_options')),
+    deleteAccount: (uid) => run(sb.rpc('admin_delete_account', { uid })),
     setCircleTeacher: (cid, tid) => run(sb.rpc('set_circle_teacher', { cid, tid })),
     async signUp(name, u, p, requested, track, circles) {
       const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null, requested_track: track ? String(track) : null, requested_circles: (circles || []).map(String) }, emailRedirectTo: location.origin + location.pathname } });
@@ -850,7 +851,7 @@ PAGES.student = async (v, arg) => {
     <div class="profile"><span class="initial lg rose">${esc(initial(s.full_name))}</span>
       <div class="grow"><h2>${esc(s.full_name)}</h2>
         <div class="choices">${studentCircles(s.id).map((c) => `<span class="tag rose">${esc(c.name)}</span>`).join('') || '<span class="tag gray">بلا حلقة</span>'}${s.active ? '' : '<span class="tag gray">غير نشطة</span>'}</div></div>
-      ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}</div>
+      ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}${isAdmin() ? '<button class="btn sm danger" id="delStu">حذف الطالبة</button>' : ''}</div>
     <dl class="facts">
       <div><dt>هاتف الطالبة</dt><dd dir="ltr" style="text-align:right">${esc(s.phone || '—')}</dd></div>
       <div><dt>العمر</dt><dd>${s.age ? `${s.age} سنة` : '—'}</dd></div>
@@ -890,6 +891,10 @@ PAGES.student = async (v, arg) => {
   </div></section></div>`;
 
   const ed = $('#editStu'); if (ed) ed.onclick = () => studentForm(s);
+  const ds = $('#delStu'); if (ds) ds.onclick = async () => {
+    if (!(await confirmBox(`حذف ${s.full_name} نهائيًّا مع كل سجلاتها؟ لا يمكن التراجع. (إن كانت انقطعت فقط، فالأفضل إلغاء «طالبة نشطة» من تعديل البيانات.)`, 'حذف'))) return;
+    try { await api.remove('students', s.id); await loadAll(); toast('حُذفت الطالبة', 'ok'); location.hash = '#/students'; } catch (err) { toast(translateError(err.message), 'bad'); }
+  };
   const activeIds = enrs.filter((e) => e.active).map((e) => e.circle_id);
   const pickCircle = (title, onPick) => {
     const options = myCircles().filter((c) => !activeIds.includes(c.id));
@@ -1052,12 +1057,17 @@ function profileForm(p) {
       <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
       <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
-      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
+      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${!self && isAdmin() ? `<button class="btn danger" type="button" id="delAcc">${p.role === 'pending' ? 'رفض وحذف' : 'حذف الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
     const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const hint = m.querySelector('#roleHint');
     const HINTS = { teacher: 'تُسنَد حلقاتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب والسرد.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
     const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); hint.textContent = HINTS[rs.value] || ''; };
     rs.onchange = sync; sync();
+    const da = m.querySelector('#delAcc'); if (da) da.onclick = async () => {
+      close();
+      if (!(await confirmBox(`حذف حساب ${p.full_name} نهائيًّا؟ لن تستطيع الدخول، وتبقى السجلات التي أدخلتها، وتصير حلقاتها بلا مشرفة. لا يمكن التراجع.`, 'حذف'))) return;
+      try { await api.deleteAccount(p.id); await loadAll(); toast('حُذف الحساب', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+    };
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
       const patch = { full_name: fd.get('full_name').trim() };

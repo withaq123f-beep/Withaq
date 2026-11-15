@@ -427,6 +427,17 @@ end $$;
 revoke execute on function public.set_circle_teacher(bigint, bigint) from public, anon;
 grant execute on function public.set_circle_teacher(bigint, bigint) to authenticated;
 
+-- حذف حساب مشرفة أو مسؤولة مسار: للقائدة فقط، ولا تحذف نفسها
+create or replace function public.admin_delete_account(uid uuid) returns void
+language plpgsql security definer set search_path = public, auth as $$
+begin
+  if not public.is_admin() then raise exception 'permission denied'; end if;
+  if uid = auth.uid() then raise exception 'cannot delete yourself'; end if;
+  delete from auth.users where id = uid;
+end $$;
+revoke execute on function public.admin_delete_account(uuid) from public, anon;
+grant execute on function public.admin_delete_account(uuid) to authenticated;
+
 -- =====================================================================
 --  المسارات والحلقات الابتدائية (تُضاف مرة واحدة إذا كانت القاعدة فارغة)
 --  كل مسار ١٠ حلقات، وتستطيع القائدة الحذف والإضافة بعد ذلك
