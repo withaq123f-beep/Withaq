@@ -397,3 +397,39 @@ begin
     end loop;
   end loop;
 end $$;
+
+-- =====================================================================
+--  ترقية: سجلات المعلِّمات بلا حسابات دخول
+--  إن كانت قاعدتكِ قائمة، شغِّلي هذا القسم وحده في SQL Editor (آمن لإعادة التشغيل)
+--  الطالبات والمعلِّمات يُسجَّلن هنا كبيانات فقط، ولا يحتجن إلى تسجيل دخول
+-- =====================================================================
+create table if not exists public.teachers (
+  id          bigint generated always as identity primary key,
+  full_name   text not null,
+  phone       text,
+  notes       text,
+  active      boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+
+-- معلِّمة الحلقة: سجلٌّ من جدول المعلِّمات (بدلًا من حساب أو اسم نصي)
+alter table public.circles
+  add column if not exists instructor_teacher_id bigint references public.teachers(id) on delete set null;
+
+alter table public.teachers enable row level security;
+
+-- يقرؤها الكادر (بما فيه أرقام الهواتف) دون حسابات الطالبات، وتضيفها وتعدِّلها المديرة ومسؤولات المسارات
+drop policy if exists teachers_select on public.teachers;
+create policy teachers_select on public.teachers for select using (public.is_staff() or public.my_role() = 'instructor');
+drop policy if exists teachers_write on public.teachers;
+drop policy if exists teachers_insert on public.teachers;
+create policy teachers_insert on public.teachers for insert
+  with check (public.my_role() in ('admin','supervisor'));
+drop policy if exists teachers_update on public.teachers;
+create policy teachers_update on public.teachers for update
+  using (public.my_role() in ('admin','supervisor'))
+  with check (public.my_role() in ('admin','supervisor'));
+
+-- حذف معلِّمة من السجل للمديرة فقط
+drop policy if exists teachers_delete on public.teachers;
+create policy teachers_delete on public.teachers for delete using (public.is_admin());
