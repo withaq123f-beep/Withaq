@@ -6,7 +6,6 @@ window.WITHAQ_CONFIG = {
   TAGLINE: 'أفئدةٌ تُضاء بالوحي',
 
   // من Supabase ← Project Settings ← API
-  // اتركيهما فارغين ليعمل الموقع بنسخة تجريبية ببيانات وهمية
   SUPABASE_URL: '',
   SUPABASE_ANON_KEY: '',
 };

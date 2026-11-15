@@ -1,6 +1,6 @@
 /* =========================================================
    حلقات وثاق القرآنية — منطق الموقع
-   يعمل بقاعدة Supabase، أو بنسخة تجريبية إن لم تُضبط الإعدادات
+   يعمل بقاعدة بيانات Supabase (الإعدادات في config.js)
    ========================================================= */
 'use strict';
 
@@ -88,7 +88,7 @@ function timeLeft(d) {
 }
 const GRADE = { excellent: 'ممتاز', good: 'جيد', repeat: 'تحتاج إعادة' };
 const ROLE = { admin: 'القائدة', supervisor: 'مسؤولة مسار', teacher: 'مشرفة حلقة', instructor: 'معلِّمة حلقة', student: 'طالبة', pending: 'بانتظار التفعيل', disabled: 'موقوفة' };
-const ACTIVE_ROLES = ['admin', 'supervisor', 'teacher', 'instructor', 'student'];
+const ACTIVE_ROLES = ['admin', 'supervisor', 'teacher']; // المعلِّمات والطالبات بلا حسابات، بياناتهن في القاعدة
 
 /* ---------------- أدوات عامة ---------------- */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -222,200 +222,18 @@ function supabaseBackend() {
   };
 }
 
-function demoBackend() {
-  const KEY = 'withaq-demo-v7';
-  let db = null; let me = null;
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* التخزين غير متاح */ } };
-  const nextId = (t) => (db[t].reduce((m, r) => (typeof r.id === 'number' ? Math.max(m, r.id) : m), 0) + 1);
-  return {
-    mode: 'demo',
-    async init() {
-      try { db = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { db = null; }
-      if (!db || db.seededOn !== today()) { db = seedDemo(); save(); }
-      try { me = sessionStorage.getItem(KEY + '-me'); } catch { me = null; }
-    },
-    async currentProfile() { return db.profiles.find((p) => p.id === me) || null; },
-    async signInAs(id) { me = id; try { sessionStorage.setItem(KEY + '-me', id); } catch { /* */ } },
-    async signIn() { throw new Error('في النسخة التجريبية اختاري أحد أزرار الدخول بالأسفل'); },
-    async signUp() { throw new Error('إنشاء الحسابات يعمل بعد ربط الموقع بقاعدة البيانات'); },
-    async signOut() { me = null; try { sessionStorage.removeItem(KEY + '-me'); } catch { /* */ } },
-    async changePassword() { throw new Error('غير متاح في النسخة التجريبية'); },
-    async list(t, f) { return applyFilters(db[t], f).map((r) => ({ ...r })); },
-    async insert(t, row) { const r = { id: nextId(t), created_at: new Date().toISOString(), ...row }; db[t].push(r); save(); return { ...r }; },
-    async update(t, id, patch) { const r = db[t].find((x) => x.id === id); Object.assign(r, patch); save(); return { ...r }; },
-    async remove(t, id) {
-      if (t === 'tracks' && db.circles.some((c) => c.track_id === id)) throw new Error(translateError('foreign key'));
-      if (t === 'circles') {
-        const eids = new Set(db.enrollments.filter((e) => e.circle_id === id).map((e) => e.id));
-        db.daily_records = db.daily_records.filter((r) => !eids.has(r.enrollment_id));
-        db.enrollments = db.enrollments.filter((e) => e.circle_id !== id);
-        db.daily_tasks = db.daily_tasks.filter((x) => x.circle_id !== id);
-      }
-      db[t] = db[t].filter((x) => x.id !== id); save();
-    },
-    async upsert(t, rows, onConflict) {
-      const keys = onConflict.split(',');
-      const out = rows.map((row) => {
-        const ex = db[t].find((r) => keys.every((k) => r[k] === row[k]));
-        if (ex) { Object.assign(ex, row); return { ...ex }; }
-        const r = { id: nextId(t), ...row }; db[t].push(r); return { ...r };
-      });
-      save(); return out;
-    },
-  };
-}
-
-function seedDemo() {
-  let seed = 11;
-  const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
-  const pick = (a) => a[Math.floor(rnd() * a.length)];
-  const TR = [
-    ['كنف', null, 'ناشئة', 'memo_review', [0, 1, 2]], ['بُنيان', null, 'أطفال', 'memo_review', [0, 1, 2]],
-    ['تمكين', null, 'خاتمات', 'fixation', [0, 1, 2, 3, 4]], ['رِكاز', 'حفظ حُر، رواية حفص', 'جامعيات', 'memo_review', [0, 1, 2, 3]],
-    ['وثيق', 'حفظ حُر، رواية حفص', 'جامعيات', 'memo_review', [0, 1, 2, 3]], ['ثبات', 'حفظ موحَّد', 'جامعيات', 'unified', [0, 1, 2, 3]],
-    ['رتاد', 'حفظ حُر، رواية ورش', 'جامعيات', 'memo_review', [0, 1, 2, 3]], ['النور', 'حفظ حُر', 'جامعيات', 'memo_review', [6, 0, 1, 2, 3]],
-    ['ضياء', 'تلقين للمبتدئات', 'جامعيات', 'memo_review', [6, 0, 1, 2, 3]], ['وهج', null, 'خاتمات', 'fixation', [0, 1, 2, 3, 4]],
-  ];
-  const CARD_A = ['عدد أوجه الحفظ', 'عدد أوجه المراجعة', 'سماع القارئ'];
-  const CARD_NOOR = [...CARD_A, 'قراءة التفسير'];
-  const CARD_B = ['مقدار الحفظ', 'مقدار المراجعة', 'سماع القارئ', 'قراءة التفسير'];
-  const CARD_C = ['مقدار الحفظ الجديد', 'مقدار المراجعة التراكمية', 'مقدار المراجعة القديمة', 'سماع النصاب', 'التسميع مع الرفيقة'];
-  const CARD_D = ['اسم السورة', 'مقدار الحفظ', 'مقدار المراجعة', 'سماع النصاب'];
-  const tracks = TR.map(([name, description, category, circle_type, days], i) => ({ id: i + 1, name, description, category, circle_type, days, sort_order: i + 1,
-    card_items: name === 'ضياء' ? CARD_B : name === 'النور' ? CARD_NOOR : circle_type === 'fixation' ? CARD_C : circle_type === 'unified' ? CARD_D : CARD_A,
-    entry_mode: ['أطفال', 'ناشئة'].includes(category) ? 'weekly' : 'daily',
-    sard_day: circle_type === 'fixation' ? null : ['أطفال', 'ناشئة'].includes(category) ? 3 : 4 }));
-  const leadNames = ['خديجة سيدي محمد', 'آمنة الشيخ', 'زينب المختار', 'عائشة محمد الأمين', 'مريم يحيى', 'فاطمة الحسن', 'صفية أحمدو', 'رقية إبراهيم', 'حفصة محمود', 'أسماء عبد الله'];
-  const supNames = ['مريم أحمد', 'سكينة محمد', 'الغالية سيدي', 'منى الشيخ', 'نجاة المختار', 'هاجر أحمدو', 'سمية الأمين', 'جويرية يحيى', 'ميمونة الحسن', 'أمينة إبراهيم', 'لالة محمود', 'مكفولة عبد الله'];
-  const teacherNames = ['أم الخير محمد', 'السالكة أحمد', 'بنت الشيخ سيدي', 'آمنة المختار', 'زينب أحمدو', 'فاطمة الأمين'];
-  const profiles = [{ id: 'u-admin', full_name: 'قائدة المقرأة', username: 'leader', role: 'admin', track_id: null }];
-  // مسؤولة المسار التجريبية (u-sup1) لمسار رِكاز
-  const leadOrder = [3, 0, 1, 2, 4, 5, 6, 7, 8, 9];
-  leadOrder.forEach((ti, k) => profiles.push({ id: k === 0 ? 'u-sup1' : `u-lead${ti}`, full_name: leadNames[k], username: `lead${ti}`, role: 'supervisor', track_id: ti + 1 }));
-  profiles.push({ id: 'u-new', full_name: 'أم كلثوم الحسن', username: 'oumkalthoum', role: 'pending', track_id: null, requested_role: 'instructor' });
-
-  const circles = []; let cid = 0; let supK = 0;
-  tracks.forEach((t) => {
-    for (let i = 1; i <= 10; i++) {
-      cid++;
-      let teacher_id = null;
-      if (i <= 2 && supK < supNames.length) {
-        const id = supK === 0 ? 'u-t1' : `u-cs${supK}`;
-        profiles.push({ id, full_name: supNames[supK], username: `cs${supK}`, role: 'teacher', track_id: null });
-        teacher_id = id; supK++;
-      }
-      circles.push({ id: cid, name: `${t.name} ${i}`, track_id: t.id, teacher_id, teacher_name: i <= 3 ? pick(teacherNames) : null, schedule: null, active: true });
-    }
-  });
-  // ترتيب: حلقة رِكاز 1 هي حلقة المشرفة التجريبية
-  const rikaz1 = circles.find((c) => c.name === 'رِكاز 1'); const first = circles.find((c) => c.teacher_id === 'u-t1');
-  [first.teacher_id, rikaz1.teacher_id] = [rikaz1.teacher_id, first.teacher_id];
-  // معلِّمات بحسابات: معلِّمة تجريبية لحلقة رِكاز 1 وحلقة أخرى
-  profiles.push({ id: 'u-ins1', full_name: 'آمنة المختار', username: 'amna', role: 'instructor', track_id: null });
-  profiles.push({ id: 'u-ins2', full_name: 'زينب أحمدو', username: 'zeinab', role: 'instructor', track_id: null });
-  rikaz1.instructor_id = 'u-ins1'; rikaz1.teacher_name = null;
-  // المشرفة التجريبية تشرف على ثلاث حلقات، منها حلقة أسبوعية من مسار كنف
-  circles.find((c) => c.name === 'رِكاز 2').teacher_id = 'u-t1';
-  circles.find((c) => c.name === 'كنف 1').teacher_id = 'u-t1';
-  const rikaz2 = circles.find((c) => c.name === 'رِكاز 2'); rikaz2.instructor_id = 'u-ins1'; rikaz2.teacher_name = null;
-  const noor1 = circles.find((c) => c.name === 'النور 1'); noor1.instructor_id = 'u-ins2'; noor1.teacher_name = null;
-
-  const fn = ['مريم', 'خديجة', 'فاطمة', 'عائشة', 'آمنة', 'زينب', 'حفصة', 'سكينة', 'رقية', 'أسماء', 'صفية', 'ميمونة', 'هاجر', 'سمية', 'جويرية', 'أم الخير', 'الغالية', 'منى', 'نجاة', 'لالة', 'السالكة', 'بنت الشيخ', 'مكفولة', 'أمينة', 'خدجة', 'تسلم', 'ماريا', 'عزيزة'];
-  const ln = ['محمد', 'أحمد', 'سيدي', 'الشيخ', 'عبد الله', 'المختار', 'أحمدو', 'الأمين', 'إبراهيم', 'يحيى', 'الحسن', 'محمود', 'البشير', 'الطالب'];
-  const students = []; const enrollments = []; const records = []; const daily_tasks = [];
-  const used = new Set(); let sid = 0;
-  circles.forEach((c) => {
-    const n = (+c.name.split(' ').pop()) <= 3 ? 4 : 0; // طالبات تجريبيات في أول ثلاث حلقات من كل مسار
-    for (let i = 0; i < n; i++) {
-      let name; do { name = `${pick(fn)} ${pick(ln)}`; } while (used.has(name));
-      used.add(name); sid++;
-      students.push({ id: sid, full_name: name, phone: `4${Math.floor(1000000 + rnd() * 8999999)}`, guardian_phone: '', birth_year: null, notes: '', joined_at: addDays(today(), -60 - Math.floor(rnd() * 200)), active: true });
-      enrollments.push({ id: sid, student_id: sid, circle_id: c.id, active: true, started_at: addDays(today(), -90) });
-    }
-  });
-  // حساب طالبة تجريبي مرتبط بأول طالبة في رِكاز 1
-  const stuEnr = enrollments.find((e) => e.circle_id === rikaz1.id);
-  profiles.push({ id: 'u-stu1', full_name: students.find((x) => x.id === stuEnr.student_id).full_name, username: 'student1', role: 'student', track_id: null, student_id: stuEnr.student_id });
-  profiles.push({ id: 'u-new2', full_name: 'سمية البشير', username: 'soumaya', role: 'pending', track_id: null, requested_role: 'student' });
-  const trackOf = (c) => tracks.find((t) => t.id === c.track_id);
-  let rid = 0;
-  enrollments.forEach((e) => {
-    const c = circles.find((x) => x.id === e.circle_id); const t = trackOf(c);
-    let s = t.category === 'أطفال' ? 78 + Math.floor(rnd() * 25) : 2 + Math.floor(rnd() * 40); let a = 1;
-    const weak = rnd() < 0.15;
-    for (let d = 35; d >= 0; d--) {
-      const date = addDays(today(), -d);
-      if (!isEntryDay(t, date)) continue;
-      if (d === 0 && c.id % 3 === 0) continue;
-      const r = rnd();
-      const attendance = r < (weak ? 0.3 : 0.07) ? 'absent' : r < (weak ? 0.4 : 0.13) ? 'late' : r < (weak ? 0.46 : 0.17) ? 'excused' : 'present';
-      const row = { id: ++rid, enrollment_id: e.id, record_date: date, attendance, grade: null, note: '', entered_by: c.teacher_id };
-      if (attendance === 'present' || attendance === 'late') {
-        const rs = Math.max(1, s - 1);
-        const rev = { review_from_surah: rs, review_from_ayah: 1, review_to_surah: rs, review_to_ayah: Math.min(SURAHS[rs - 1][1], 10 + Math.floor(rnd() * 25)) };
-        if (t.circle_type !== 'fixation') {
-          const step = t.category === 'أطفال' ? 2 + Math.floor(rnd() * 3) : 5 + Math.floor(rnd() * 8);
-          const toA = Math.min(SURAHS[s - 1][1], a + step - 1);
-          Object.assign(row, { memo_from_surah: s, memo_from_ayah: a, memo_to_surah: s, memo_to_ayah: toA });
-          if (toA >= SURAHS[s - 1][1]) { s = Math.min(114, s + 1); a = 1; } else a = toA + 1;
-        }
-        Object.assign(row, rev);
-        row.memo_pages = row.memo_to_surah ? Math.round(rangeCount(row.memo_from_surah, row.memo_from_ayah, row.memo_to_surah, row.memo_to_ayah) * 604 / 6236 * 10) / 10 || 0.5 : null;
-        row.review_pages = 2 + Math.floor(rnd() * 8);
-        // بطاقة الواتساب: كل بند فارغ أو «لا» تقصير
-        const vals = { 'سماع القارئ': 'نعم', 'سماع النصاب': 'نعم', 'قراءة التفسير': 'نعم', 'التسميع مع الرفيقة': 'تم', 'اسم السورة': row.memo_to_surah ? SURAHS[row.memo_from_surah - 1][0] : '' };
-        row.card = t.card_items.map((label) => {
-          let value = vals[label] ?? (/مراجع/.test(label) ? `${row.review_pages} أوجه` : row.memo_pages ? `${row.memo_pages}` : '');
-          if (rnd() < (weak ? 0.25 : 0.05)) value = rnd() < 0.5 ? '' : 'لا';
-          return { label, value, ok: !!value && value !== 'لا' };
-        });
-        row.shortcoming_items = row.card.filter((x) => !x.ok).map((x) => x.label);
-        row.shortcoming = row.shortcoming_items.length > 0;
-      }
-      records.push(row);
-    }
-  });
-  // مهام مسؤولات المسارات للأيام الماضية واليوم
-  let tid = 0; const td = taskDay();
-  for (let d = 14; d >= 0; d--) {
-    const date = addDays(td, -d); const wd = new Date(date + 'T12:00:00').getDay();
-    tracks.forEach((t, ti) => {
-      if (!isEntryDay(t, date)) return;
-      const doneShare = d === 0 ? [1, 0.6, 0, 1, 0.3, 0, 1, 0.8, 0, 1][ti] : (rnd() < 0.85 ? 1 : 0.5);
-      circles.filter((c) => c.track_id === t.id).forEach((c, k) => {
-        if (k >= Math.round(doneShare * 10)) return;
-        const n = enrollments.filter((e) => e.circle_id === c.id).length || 8 + Math.floor(rnd() * 6);
-        const absent = Math.floor(rnd() * 3); const excused = Math.floor(rnd() * 2);
-        daily_tasks.push({ id: ++tid, circle_id: c.id, task_date: date, present_count: Math.max(0, n - absent - excused), absent_count: absent, excused_count: excused, done_by: null, updated_at: new Date().toISOString() });
-      });
-    });
-  }
-  // السرد الأسبوعي لآخر ٤ أسابيع، مع طالبات وصلن الحد وأخريات في الإنذار
-  const weekly_sard = []; let wsid = 0; let forcedLimit = 0; let forcedWarn = 0;
-  enrollments.forEach((e) => {
-    const c = circles.find((x) => x.id === e.circle_id); const t = trackOf(c);
-    const dates = sardDates(t, 4); if (!dates.length) return;
-    if (c.name.endsWith(' 3') && dates[0] === sardDates(t, 1)[0] && t.name === 'وثيق') return; // حلقة لم يُسجَّل سردها
-    let pattern = dates.map(() => rnd() < 0.88);
-    if (forcedLimit < 3 && rnd() < 0.12) { pattern[0] = false; pattern[1] = false; forcedLimit++; }
-    else if (forcedWarn < 4 && rnd() < 0.12) { pattern[0] = false; pattern[1] = true; forcedWarn++; }
-    dates.forEach((d, i) => weekly_sard.push({ id: ++wsid, enrollment_id: e.id, sard_date: d, done: pattern[i], note: null, recorded_by: c.teacher_id, updated_at: new Date().toISOString() }));
-  });
-  return { seededOn: today(), profiles, tracks, circles, students, enrollments, daily_records: records, staff_attendance: [], daily_tasks, weekly_sard };
-}
-
-const api = CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY ? supabaseBackend() : demoBackend();
+let api = null;
 
 /* =========================================================
    الحالة والصلاحيات
    ========================================================= */
-const S = { me: null, profiles: [], tracks: [], circles: [], students: [], enrollments: [] };
+const S = { me: null, profiles: [], tracks: [], circles: [], students: [], enrollments: [], teachers: [] };
 
 async function loadAll() {
-  const [profiles, tracks, circles, students, enrollments] = await Promise.all([
-    api.list('profiles'), api.list('tracks'), api.list('circles'), api.list('students'), api.list('enrollments'),
+  const [profiles, tracks, circles, students, enrollments, teachers] = await Promise.all([
+    api.list('profiles'), api.list('tracks'), api.list('circles'), api.list('students'), api.list('enrollments'), api.list('teachers'),
   ]);
-  Object.assign(S, { profiles, tracks: tracks.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id), circles: circles.sort(byName), students: students.sort(byName), enrollments });
+  Object.assign(S, { teachers: teachers.sort(byName), profiles, tracks: tracks.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id), circles: circles.sort(byName), students: students.sort(byName), enrollments });
 }
 
 const role = () => S.me?.role;
@@ -425,7 +243,8 @@ const isIns = () => role() === 'instructor';
 const isStu = () => role() === 'student';
 const canEditStudents = () => isAdmin() || isSup();
 const canEnter = () => isAdmin() || isSup() || role() === 'teacher';
-const instructorName = (c) => (c?.instructor_id ? profileName(c.instructor_id) : '') || c?.teacher_name || '';
+const teacherById = (id) => S.teachers.find((t) => t.id === id);
+const instructorName = (c) => teacherById(c?.teacher_ref)?.full_name || c?.teacher_name || '';
 const profileName = (id) => S.profiles.find((p) => p.id === id)?.full_name || '—';
 const trackName = (id) => S.tracks.find((t) => t.id === id)?.name || '—';
 const circleById = (id) => S.circles.find((c) => c.id === id);
@@ -530,7 +349,6 @@ const attTag = (a) => `<span class="tag ${a === 'present' ? 'olive' : a === 'abs
    الدخول
    ========================================================= */
 function renderAuth(mode = 'login', error = '') {
-  const demo = api.mode === 'demo';
   $('#app').innerHTML = `
   <div class="gate">
     <section class="gate-art"><div class="frame"></div>
@@ -539,27 +357,21 @@ function renderAuth(mode = 'login', error = '') {
     </section>
     <section class="gate-form"><div class="box">
       <h2>${mode === 'login' ? 'أهلًا بكِ' : 'حساب جديد'}</h2>
-      <p class="lead">${mode === 'login' ? 'ادخلي لمتابعة حلقاتكِ أو تقدُّمكِ.' : 'للطالبات والمعلِّمات والمشرفات. تُفعِّله القائدة بعد التسجيل.'}</p>
+      <p class="lead">${mode === 'login' ? 'ادخلي لمتابعة الحلقات والطالبات.' : 'لمشرفات الحلقات ومسؤولات المسارات. تُفعِّله القائدة بعد التسجيل.'}</p>
       <form id="authForm" autocomplete="on">
         ${mode === 'signup' ? `<label class="field">الاسم الكامل<input class="input" name="name" required></label>
         <label class="field">نوع الحساب<select class="input" name="requested" required>
-          <option value="student">طالبة</option><option value="instructor">معلِّمة حلقة</option><option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>` : ''}
+          <option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>` : ''}
         <label class="field">اسم المستخدمة<input class="input" name="username" required dir="ltr" autocomplete="username" pattern="[A-Za-z0-9_.\\-]{3,}" title="حروف إنجليزية أو أرقام، 3 أحرف على الأقل"></label>
         <label class="field">كلمة المرور<input class="input" name="password" type="password" required minlength="6" dir="ltr" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
         ${error ? `<div class="error" role="alert">${esc(error)}</div>` : ''}
         <button class="btn block" type="submit">${mode === 'login' ? 'دخول' : 'إنشاء الحساب'}</button>
       </form>
       <p class="switch-line">${mode === 'login' ? 'ليس لديكِ حساب؟<button class="linkish" data-mode="signup">أنشئي حسابًا</button>' : 'لديكِ حساب؟<button class="linkish" data-mode="login">سجِّلي الدخول</button>'}</p>
-      ${demo ? `<div class="demo-pick"><p>هذه نسخة تجريبية ببيانات وهمية. جرِّبيها بأحد الأدوار:</p><div class="row">
-        <button class="btn sm" data-demo="u-admin">القائدة</button>
-        <button class="btn sm olive" data-demo="u-sup1">مسؤولة مسار</button>
-        <button class="btn sm quiet" data-demo="u-t1">مشرفة حلقة</button>
-        <button class="btn sm quiet" data-demo="u-ins1">معلِّمة حلقة</button>
-        <button class="btn sm quiet" data-demo="u-stu1">طالبة</button></div></div>` : ''}
+
     </div></section>
   </div>`;
   $('[data-mode]').onclick = (e) => renderAuth(e.target.dataset.mode);
-  $$('[data-demo]').forEach((b) => (b.onclick = async () => { await api.signInAs(b.dataset.demo); location.hash = '#/home'; start(); }));
   $('#authForm').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target); const btn = e.target.querySelector('button[type=submit]');
@@ -608,11 +420,10 @@ function renderShell() {
       <a class="brand" href="#/home"><img src="${LOGO}" alt="${esc(SITE.name)}"></a>
       <nav>${items.filter(([k]) => k !== 'account').map(([k, l]) => `<a class="nav" href="#/${k}" data-nav="${k}">${icon(k)}<span>${l}</span></a>`).join('')}</nav>
       <a class="me" href="#/account" data-nav="account"><span class="initial">${esc(initial(S.me.full_name))}</span>
-        <span class="who"><b>${esc(S.me.full_name)}</b><span>${ROLE[role()]}${api.mode === 'demo' ? ' (تجريبي)' : ''}</span></span></a>
+        <span class="who"><b>${esc(S.me.full_name)}</b><span>${ROLE[role()]}</span></span></a>
     </aside>
     <div>
       <header class="topbar"><img src="${MARK}" alt=""><span class="t">${esc(SITE.name)}</span><span class="sp"></span>
-        ${api.mode === 'demo' ? '<span class="trial">تجريبي</span>' : ''}
         <a href="#/account" aria-label="حسابي"><span class="initial">${esc(initial(S.me.full_name))}</span></a></header>
       <main id="view"></main>
     </div>
@@ -994,7 +805,6 @@ PAGES.student = async (v, arg) => {
       <div><dt>الالتحاق</dt><dd>${s.joined_at ? fmtDate(s.joined_at, { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</dd></div>
       <div><dt>آخر موضع حفظ</dt><dd>${lastM ? esc(posText(lastM.memo_to_surah, lastM.memo_to_ayah)) : '—'}</dd></div>
       ${sardRow ? `<div><dt>السرد الأسبوعي (آخر ٤)</dt><dd>${trailHtml(sardRow)} ${sardRow.streak >= SARD_LIMIT ? '<span class="tag red">وصلت حدَّ الحذف</span>' : sardRow.streak ? '<span class="tag amber">فاتها أسبوع</span>' : ''}</dd></div>` : ''}
-      ${!isStu() ? `<div><dt>حساب الطالبة</dt><dd dir="ltr" style="text-align:right">${accounts.length ? accounts.map((a) => '@' + esc(a.username)).join('، ') : '—'}</dd></div>` : ''}
       ${studentCircles(s.id).some((c) => instructorName(c)) ? `<div><dt>المعلِّمة</dt><dd>${esc(studentCircles(s.id).map((c) => instructorName(c)).filter(Boolean).join('، '))}</dd></div>` : ''}
     </dl>
     ${s.notes ? `<p style="margin-top:12px;color:var(--ink-2)">${esc(s.notes)}</p>` : ''}
@@ -1125,7 +935,6 @@ PAGES.staff = async (v) => {
   STF.date = STF.date || today();
   const pending = S.profiles.filter((p) => p.role === 'pending');
   const staff = S.profiles.filter((p) => p.role !== 'pending' && p.role !== 'student').sort(byName);
-  const stuAccounts = S.profiles.filter((p) => p.role === 'student').sort(byName);
   const teachers = isAdmin()
     ? S.profiles.filter((p) => p.role === 'teacher' || (!['pending', 'disabled'].includes(p.role) && S.circles.some((c) => c.teacher_id === p.id))).sort(byName)
     : [...new Set(myCircles().map((c) => c.teacher_id).filter(Boolean))].map((id) => S.profiles.find((p) => p.id === id)).filter(Boolean).sort(byName);
@@ -1147,13 +956,16 @@ PAGES.staff = async (v) => {
   </section>
   ${isAdmin() ? `<section class="sheet"><h2>الكادر <small>${staff.length}</small></h2><div class="lines">
     ${staff.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
-      <div class="s">${p.role === 'supervisor' ? esc(trackName(p.track_id)) : p.role === 'instructor' ? esc(S.circles.filter((c) => c.instructor_id === p.id).map((c) => c.name).join('، ') || '—') : esc(circlesOf(p.id) || '—')}</div></div>
+      <div class="s">${p.role === 'supervisor' ? esc(trackName(p.track_id)) : esc(circlesOf(p.id) || '—')}</div></div>
       <span class="tag ${p.role === 'admin' ? 'rose' : p.role === 'supervisor' ? 'olive' : p.role === 'disabled' ? 'gray' : p.role === 'instructor' ? 'blue' : 'amber'}">${ROLE[p.role]}</span></button>`).join('')}
   </div></section>
-  <section class="sheet"><details><summary class="sec-title" style="cursor:pointer;margin:0">حسابات الطالبات <small>${stuAccounts.length}</small></summary><div class="lines" style="margin-top:10px">
-    ${stuAccounts.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
-      <div class="s"><span dir="ltr">@${esc(p.username)}</span>، ${esc(studentById(p.student_id)?.full_name || 'غير مرتبط بسجل')}</div></div></button>`).join('') || '<div class="empty">لا حسابات طالبات بعد</div>'}
-  </div></details></section>` : ''}</div>`;
+  ` : ''}
+  <section class="sheet"><h2>معلِّمات الحلقات <small>${S.teachers.length}، بلا حسابات دخول</small></h2>
+    ${isAdmin() || isSup() ? '<button class="btn sm quiet" id="addTeacher" style="margin-bottom:8px">إضافة معلِّمة</button>' : ''}
+    <div class="lines">${S.teachers.map((t) => { const cs = S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.name);
+      return `<button class="line" data-teacher="${t.id}"><span class="initial">${esc(initial(t.full_name))}</span><div class="grow"><div class="t">${esc(t.full_name)}</div>
+      <div class="s">${esc(cs.join('، ') || 'بلا حلقة')}${t.phone ? `، <span dir="ltr">${esc(t.phone)}</span>` : ''}</div></div>${t.active ? '' : '<span class="tag gray">متوقفة</span>'}</button>`; }).join('') || '<div class="empty">لم تُضف معلِّمات بعد</div>'}</div>
+  </section></div>`;
 
   $('#sDate').onchange = (e) => { if (e.target.value) { STF.date = e.target.value; route(); } };
   $$('#sAtt .choice', v).forEach((b) => (b.onclick = () => {
@@ -1170,46 +982,59 @@ PAGES.staff = async (v) => {
     catch (err) { toast(translateError(err.message), 'bad'); sv.disabled = false; }
   };
   $$('[data-edit]', v).forEach((b) => (b.onclick = () => profileForm(S.profiles.find((p) => p.id === b.dataset.edit))));
+  const at = $('#addTeacher'); if (at) at.onclick = () => teacherForm();
+  $$('[data-teacher]', v).forEach((b) => (b.onclick = () => { if (isAdmin() || isSup()) teacherForm(teacherById(+b.dataset.teacher)); }));
 };
 
 function profileForm(p) {
   const self = p.id === S.me.id;
-  const initialRole = p.role === 'pending' ? (p.requested_role && ROLE[p.requested_role] ? p.requested_role : 'teacher') : p.role;
-  const linked = new Set(S.profiles.filter((x) => x.role === 'student' && x.student_id && x.id !== p.id).map((x) => x.student_id));
-  const stuOpts = S.students.filter((st) => st.active && !linked.has(st.id)).sort(byName);
+  const initialRole = p.role === 'pending' ? (['teacher', 'supervisor'].includes(p.requested_role) ? p.requested_role : 'teacher') : p.role;
   modal(`<h2>${p.role === 'pending' ? 'تفعيل الحساب' : 'بيانات الحساب'}</h2>
     <form class="form-grid" id="pf">
       <label class="field full">الاسم<input class="input" name="full_name" required value="${esc(p.full_name)}"></label>
-      ${p.role === 'pending' && p.requested_role ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role] || p.requested_role}</b></p>` : ''}
-      <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['student', 'instructor', 'teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
+      ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b></p>` : ''}
+      <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
       <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
-      <label class="field full" id="studentField">سجلُّ الطالبة<input class="input" name="student_pick" list="stuList2" placeholder="اكتبي اسم الطالبة واختاريه" value="${esc(p.student_id ? (studentById(p.student_id)?.full_name || '') : '')}">
-        <datalist id="stuList2">${stuOpts.concat(p.student_id && studentById(p.student_id) ? [studentById(p.student_id)] : []).map((st) => `<option value="${esc(st.full_name)}">${esc(studentCircles(st.id).map((c) => c.name).join('، '))}</option>`).join('')}</datalist></label>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
       <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
-    const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const sf = m.querySelector('#studentField'); const hint = m.querySelector('#roleHint');
-    const HINTS = { teacher: 'تُسنَد حلقتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب.', instructor: 'تُسنَد حلقتها من «المسارات والحلقات»، وترى طالبات حلقتها وتقدُّمهن دون تعديل.', student: 'ترى تقدُّمها هي فقط.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
-    const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); sf.classList.toggle('hidden', rs.value !== 'student'); hint.textContent = HINTS[rs.value] || ''; };
+    const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const hint = m.querySelector('#roleHint');
+    const HINTS = { teacher: 'تُسنَد حلقاتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب والسرد.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
+    const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); hint.textContent = HINTS[rs.value] || ''; };
     rs.onchange = sync; sync();
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
       const patch = { full_name: fd.get('full_name').trim() };
-      if (!self) {
-        patch.role = fd.get('role');
-        patch.track_id = patch.role === 'supervisor' ? (+fd.get('track_id') || null) : null;
-        patch.student_id = null;
-        if (patch.role === 'student') {
-          const nm = fd.get('student_pick').trim();
-          const st = S.students.find((x) => x.full_name === nm);
-          if (!st) { toast('اختاري سجلَّ الطالبة من القائمة (أضيفيها من «الطالبات» إن لم تكن موجودة)', 'bad'); return; }
-          if (linked.has(st.id)) { toast('هذا السجلُّ مرتبط بحساب آخر', 'bad'); return; }
-          patch.student_id = st.id;
-        }
-      }
+      if (!self) { patch.role = fd.get('role'); patch.track_id = patch.role === 'supervisor' ? (+fd.get('track_id') || null) : null; }
       if (patch.role === 'supervisor' && !patch.track_id) { toast('اختاري مسار مسؤولة المسار', 'bad'); return; }
       try { await api.update('profiles', p.id, patch); await loadAll(); close(); toast(p.role === 'pending' ? 'فُعِّل الحساب 🌸' : 'حُفظ 🌸', 'ok'); route(); }
       catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+  });
+}
+
+// معلِّمات الحلقات: بيانات فقط بلا حسابات دخول
+function teacherForm(t = null) {
+  modal(`<h2>${t ? 'بيانات المعلِّمة' : 'معلِّمة جديدة'}</h2>
+    <form class="form-grid" id="tcf">
+      <label class="field full">الاسم الكامل<input class="input" name="full_name" required value="${esc(t?.full_name)}"></label>
+      <label class="field full">رقم الهاتف<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(t?.phone)}"></label>
+      <label class="field full">ملاحظات<textarea class="input" name="notes">${esc(t?.notes)}</textarea></label>
+      ${t ? `<label class="check full"><input type="checkbox" name="active"${t.active ? ' checked' : ''}> على رأس العمل</label>` : ''}
+      <p class="full" style="color:var(--ink-3);font-size:.86rem">تُسنَد المعلِّمة لحلقتها من «المسارات والحلقات».</p>
+      <div class="actions full"><button class="btn" type="submit">${t ? 'حفظ' : 'إضافة المعلِّمة'}</button>${t && isAdmin() ? '<button class="btn danger" type="button" id="delTc">حذف</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
+    </form>`, (m, close) => {
+    m.querySelector('#tcf').onsubmit = async (e) => {
+      e.preventDefault(); const fd = new FormData(e.target);
+      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, notes: fd.get('notes').trim() || null, active: t ? !!fd.get('active') : true };
+      try { t ? await api.update('teachers', t.id, row) : await api.insert('teachers', row); await loadAll(); close(); toast(t ? 'حُفظت بيانات المعلِّمة 🌸' : 'أُضيفت المعلِّمة 🌸', 'ok'); route(); }
+      catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+    const d = m.querySelector('#delTc'); if (d) d.onclick = async () => {
+      close();
+      const n = S.circles.filter((c) => c.teacher_ref === t.id).length;
+      if (!(await confirmBox(n ? `حذف ${t.full_name}؟ ستبقى ${n} حلقة بلا معلِّمة.` : `حذف ${t.full_name}؟`, 'حذف'))) return;
+      try { await api.remove('teachers', t.id); await loadAll(); toast('حُذفت', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
     };
   });
 }
@@ -1273,15 +1098,14 @@ PAGES.settings = async (v) => {
       <label class="field">اسم الحلقة<input class="input" name="name" required value="${esc(c?.name)}"></label>
       <label class="field">المسار<select class="input" name="track_id">${S.tracks.map((t) => `<option value="${t.id}"${c?.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <label class="field">مشرفة الحلقة (تُدخل البيانات)<select class="input" name="teacher_id"><option value="">لم تُحدَّد</option>${supOpts.map((p) => `<option value="${esc(p.id)}"${c?.teacher_id === p.id ? ' selected' : ''}>${esc(p.full_name)}</option>`).join('')}</select></label>
-      <label class="field">معلِّمة الحلقة (حساب)<select class="input" name="instructor_id"><option value="">بلا حساب</option>${S.profiles.filter((p) => p.role === 'instructor').sort(byName).map((p) => `<option value="${esc(p.id)}"${c?.instructor_id === p.id ? ' selected' : ''}>${esc(p.full_name)}</option>`).join('')}</select></label>
-      <label class="field">اسم المعلِّمة (إن لم يكن لها حساب)<input class="input" name="teacher_name" value="${esc(c?.teacher_name)}"></label>
+      <label class="field">معلِّمة الحلقة<select class="input" name="teacher_ref"><option value="">لم تُحدَّد</option>${S.teachers.filter((t) => t.active || t.id === c?.teacher_ref).map((t) => `<option value="${t.id}"${c?.teacher_ref === t.id ? ' selected' : ''}>${esc(t.full_name)}</option>`).join('')}</select></label>
       <label class="field full">الوقت<input class="input" name="schedule" placeholder="مثال: بعد العصر" value="${esc(c?.schedule)}"></label>
       ${c ? `<label class="check full"><input type="checkbox" name="active"${c.active ? ' checked' : ''}> الحلقة قائمة</label>` : ''}
       <div class="actions full"><button class="btn" type="submit">حفظ</button>${c ? '<button class="btn danger" type="button" id="delC">حذف الحلقة</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div></form>`,
     (m, close) => {
       m.querySelector('#cf').onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
-        const row = { name: fd.get('name').trim(), track_id: +fd.get('track_id'), teacher_id: fd.get('teacher_id') || null, teacher_name: fd.get('teacher_name').trim() || null, instructor_id: fd.get('instructor_id') || null, schedule: fd.get('schedule').trim() || null, active: c ? !!fd.get('active') : true };
+        const row = { name: fd.get('name').trim(), track_id: +fd.get('track_id'), teacher_id: fd.get('teacher_id') || null, teacher_ref: +fd.get('teacher_ref') || null, schedule: fd.get('schedule').trim() || null, active: c ? !!fd.get('active') : true };
         try { c ? await api.update('circles', c.id, row) : await api.insert('circles', row); await loadAll(); close(); toast('حُفظت الحلقة 🌸', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
       };
       const del = m.querySelector('#delC'); if (del) del.onclick = async () => {
@@ -1526,10 +1350,8 @@ PAGES.account = async (v) => {
     <dl class="facts"><div><dt>الدور</dt><dd>${ROLE[role()]}</dd></div>
       ${isSup() ? `<div><dt>المسار</dt><dd>${esc(trackName(S.me.track_id))}</dd></div>` : ''}
       ${mine.length ? `<div><dt>حلقاتي</dt><dd>${esc(mine.map((c) => c.name).join('، '))}</dd></div>` : ''}</dl></section>
-  ${api.mode === 'live' ? `<section class="sheet"><h2>تغيير كلمة المرور</h2>
+  ${api.mode !== 'none' ? `<section class="sheet"><h2>تغيير كلمة المرور</h2>
     <form id="pw" style="display:grid;gap:10px;max-width:360px"><input class="input" type="password" name="p1" minlength="6" required placeholder="كلمة المرور الجديدة" dir="ltr" aria-label="كلمة المرور الجديدة"><input class="input" type="password" name="p2" minlength="6" required placeholder="أعيدي كتابتها" dir="ltr" aria-label="تأكيد كلمة المرور"><button class="btn" type="submit">تغيير كلمة المرور</button></form></section>` : ''}
-  ${api.mode === 'demo' ? `<section class="sheet"><h2>جرِّبي دورًا آخر <small>البيانات وهمية وتتجدَّد يوميًّا</small></h2><div class="choices">
-    ${[['u-admin', 'القائدة'], ['u-sup1', 'مسؤولة مسار'], ['u-t1', 'مشرفة حلقة'], ['u-ins1', 'معلِّمة حلقة'], ['u-stu1', 'طالبة']].map(([id, l]) => `<button class="btn sm ${S.me.id === id ? '' : 'ghost'}" data-as="${id}">${l}</button>`).join('')}</div></section>` : ''}
   ${navItems().filter(([k]) => k !== 'account' && !$$('.dock a').some((a) => a.dataset.nav === k)).length ? `<section class="sheet more-links"><h2>صفحات أخرى</h2><div class="lines">${navItems().filter(([k]) => k !== 'account' && !$$('.dock a').some((a) => a.dataset.nav === k)).map(([k, l]) => `<a class="line" href="#/${k}">${icon(k).replace('<svg', '<svg width="20" height="20"')}<div class="grow t">${l}</div></a>`).join('')}</div></section>` : ''}
   <section class="sheet"><button class="btn danger block" id="logout">تسجيل الخروج</button></section></div>`;
   const pw = $('#pw');
@@ -1538,7 +1360,6 @@ PAGES.account = async (v) => {
     if (fd.get('p1') !== fd.get('p2')) { toast('كلمتا المرور غير متطابقتين', 'bad'); return; }
     try { await api.changePassword(fd.get('p1')); e.target.reset(); toast('تغيَّرت كلمة المرور 🌿', 'ok'); } catch (err) { toast(translateError(err.message), 'bad'); }
   };
-  $$('[data-as]', v).forEach((b) => (b.onclick = async () => { await api.signInAs(b.dataset.as); location.hash = '#/home'; start(); }));
   $('#logout').onclick = async () => { await api.signOut(); location.hash = ''; start(); };
 };
 
@@ -1546,12 +1367,19 @@ PAGES.account = async (v) => {
    التشغيل
    ========================================================= */
 let booted = false;
+function renderSetup() {
+  $('#app').innerHTML = `<div class="waiting"><img src="${LOGO}" alt=""><h2>الموقع غير مربوط بقاعدة البيانات</h2>
+    <p>افتحي ملف <b dir="ltr">config.js</b> وضعي فيه رابط مشروع Supabase والمفتاح العام (anon أو publishable).</p></div>`;
+}
 async function start() {
   try {
-    if (!booted) { await api.init(); booted = true; window.addEventListener('hashchange', () => S.me && ACTIVE_ROLES.includes(role()) && route()); }
+    if (!booted) {
+      api = window.WITHAQ_BACKEND ? window.WITHAQ_BACKEND() : (CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY ? supabaseBackend() : null);
+      if (!api) { renderSetup(); return; }
+      await api.init(); booted = true; window.addEventListener('hashchange', () => S.me && ACTIVE_ROLES.includes(role()) && route()); }
     S.me = await api.currentProfile();
     if (!S.me) { renderAuth(); return; }
-    if (!ACTIVE_ROLES.includes(S.me.role) || (S.me.role === 'student' && !S.me.student_id)) { renderPending(); return; }
+    if (!ACTIVE_ROLES.includes(S.me.role)) { renderPending(); return; }
     await loadAll(); renderShell(); route();
   } catch (err) {
     console.error(err);

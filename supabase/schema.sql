@@ -39,13 +39,24 @@ alter table public.profiles
   drop constraint if exists profiles_track_fk,
   add constraint profiles_track_fk foreign key (track_id) references public.tracks(id) on delete set null;
 
+-- معلِّمات الحلقات: بيانات فقط بلا حسابات دخول
+create table if not exists public.teachers (
+  id          bigint generated always as identity primary key,
+  full_name   text not null,
+  phone       text,
+  notes       text,
+  active      boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+
 create table if not exists public.circles (
   id          bigint generated always as identity primary key,
   name        text not null,
   track_id    bigint not null references public.tracks(id) on delete restrict,
   teacher_id  uuid references public.profiles(id) on delete set null, -- مشرفة الحلقة (تُدخل البيانات)
   teacher_name text,                -- اسم معلِّمة الحلقة (إن لم يكن لها حساب)
-  instructor_id uuid references public.profiles(id) on delete set null, -- حساب معلِّمة الحلقة
+  instructor_id uuid references public.profiles(id) on delete set null, -- (قديم، غير مستخدم)
+  teacher_ref bigint references public.teachers(id) on delete set null, -- معلِّمة الحلقة من جدول المعلِّمات
   schedule    text,                 -- الوقت، مثل: بعد العصر
   active      boolean not null default true,
   created_at  timestamptz not null default now()
@@ -262,6 +273,7 @@ alter table public.daily_records    enable row level security;
 alter table public.staff_attendance enable row level security;
 alter table public.daily_tasks      enable row level security;
 alter table public.weekly_sard      enable row level security;
+alter table public.teachers         enable row level security;
 
 -- الملفات: كل عضوة ترى ملفها، والكادر يرى الكادر، والمديرة تعدِّل الجميع
 drop policy if exists profiles_select on public.profiles;
@@ -358,6 +370,13 @@ drop policy if exists sard_write on public.weekly_sard;
 create policy sard_write on public.weekly_sard for all
   using (public.can_manage_enrollment(enrollment_id))
   with check (public.can_manage_enrollment(enrollment_id));
+
+-- المعلِّمات: يقرأ بياناتهن الكادر، وتديرها القائدة ومسؤولات المسارات
+drop policy if exists teachers_select on public.teachers;
+create policy teachers_select on public.teachers for select using (public.is_staff());
+drop policy if exists teachers_write on public.teachers;
+create policy teachers_write on public.teachers for all
+  using (public.my_role() in ('admin','supervisor')) with check (public.my_role() in ('admin','supervisor'));
 
 -- =====================================================================
 --  المسارات والحلقات الابتدائية (تُضاف مرة واحدة إذا كانت القاعدة فارغة)
