@@ -195,8 +195,9 @@ function supabaseBackend() {
       const { error } = await sb.auth.signInWithPassword({ email: email(u), password: p });
       if (error) throw new Error(/confirm/i.test(error.message) ? 'أكِّدي بريدكِ أولًا من الرابط الذي وصلكِ، ثم ادخلي' : 'البريد أو كلمة المرور غير صحيحة');
     },
-    async signUp(name, u, p, requested) {
-      const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null }, emailRedirectTo: location.origin + location.pathname } });
+    signupOptions: () => run(sb.rpc('signup_options')),
+    async signUp(name, u, p, requested, track, circles) {
+      const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null, requested_track: track ? String(track) : null, requested_circles: (circles || []).map(String) }, emailRedirectTo: location.origin + location.pathname } });
       if (error) throw new Error(translateError(error.message));
       if (!data.session) return 'confirm'; // التأكيد مفعَّل: وصلها رابط على بريدها
     },
@@ -362,7 +363,9 @@ function renderAuth(mode = 'login', error = '', info = '') {
       <form id="authForm" autocomplete="on">
         ${mode === 'signup' ? `<label class="field">الاسم الكامل<input class="input" name="name" required></label>
         <label class="field">نوع الحساب<select class="input" name="requested" required>
-          <option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>` : ''}
+          <option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>
+        <label class="field">المسار<select class="input" name="track" required><option value="">جارٍ تحميل المسارات…</option></select></label>
+        <div class="field" id="circleBox">حلقتكِ (يمكن اختيار أكثر من حلقة)<div class="choices" id="circleChoices"><span class="hint-line">اختاري المسار أولًا</span></div></div>` : ''}
         <label class="field">البريد الإلكتروني<input class="input" name="username" type="email" required dir="ltr" autocomplete="email" inputmode="email"></label>
         <label class="field">كلمة المرور<input class="input" name="password" type="password" required minlength="6" dir="ltr" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
         ${error ? `<div class="error" role="alert">${esc(error)}</div>` : ''}
@@ -374,18 +377,38 @@ function renderAuth(mode = 'login', error = '', info = '') {
     </div></section>
   </div>`;
   $('[data-mode]').onclick = (e) => renderAuth(e.target.dataset.mode);
+  if (mode === 'signup') loadSignupOptions();
   $('#authForm').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target); const btn = e.target.querySelector('button[type=submit]');
     btn.disabled = true;
     try {
       if (mode === 'signup') {
-        const r = await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'));
+        const circlesPicked = fd.getAll('circle').map(Number);
+        if (fd.get('requested') === 'teacher' && !circlesPicked.length) { btn.disabled = false; toast('اختاري حلقتكِ', 'bad'); return; }
+        const r = await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'), +fd.get('track') || null, fd.get('requested') === 'teacher' ? circlesPicked : []);
         if (r === 'confirm') { renderAuth('login', '', 'أُنشئ حسابكِ 🌸 افتحي رابط التأكيد الذي وصل إلى بريدكِ، ثم ادخلي.'); return; }
       } else await api.signIn(fd.get('username'), fd.get('password'));
       start();
     } catch (err) { renderAuth(mode, err.message); }
   };
+}
+
+// خيارات التسجيل: المسار، والحلقات الشاغرة لمشرفة الحلقة
+async function loadSignupOptions() {
+  const form = $('#authForm'); if (!form) return;
+  const trackSel = form.querySelector('[name=track]'); const roleSel = form.querySelector('[name=requested]');
+  const box = $('#circleBox'); const list = $('#circleChoices');
+  let opts;
+  try { opts = await api.signupOptions(); } catch (err) { trackSel.innerHTML = '<option value="">تعذَّر تحميل المسارات</option>'; return; }
+  trackSel.innerHTML = '<option value="">اختاري المسار</option>' + (opts.tracks || []).map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  const drawCircles = () => {
+    const tid = +trackSel.value;
+    const cs = (opts.circles || []).filter((c) => c.track_id === tid).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ar', { numeric: true }));
+    list.innerHTML = !tid ? '<span class="hint-line">اختاري المسار أولًا</span>' : cs.map((c) => `<label class="choice${c.taken ? ' taken' : ''}"><input type="checkbox" name="circle" value="${c.id}" ${c.taken ? 'disabled' : ''} style="accent-color:var(--rose-deep)"> ${esc(c.name)}${c.taken ? ' (لها مشرفة)' : ''}</label>`).join('') || '<span class="hint-line">لا حلقات في هذا المسار</span>';
+  };
+  const syncRole = () => box.classList.toggle('hidden', roleSel.value !== 'teacher');
+  trackSel.onchange = drawCircles; roleSel.onchange = syncRole; syncRole();
 }
 
 function renderPending() {
@@ -948,7 +971,7 @@ PAGES.staff = async (v) => {
 
   v.innerHTML = `<div class="wrap">${cartouche('الكادر', 'الحسابات وحضور مشرفات الحلقات')}
   ${isAdmin() && pending.length ? `<section class="sheet"><h2>بانتظار التفعيل <small>${pending.length}</small></h2><div class="lines">
-    ${pending.map((p) => `<div class="line"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s"><span dir="ltr">${esc(p.username)}</span>${p.requested_role ? `، ${ROLE[p.requested_role] || ''}` : ''}</div></div><button class="btn sm" data-edit="${esc(p.id)}">تفعيل</button></div>`).join('')}
+    ${pending.map((p) => `<div class="line"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s"><span dir="ltr">${esc(p.username)}</span>${p.requested_role ? `، ${ROLE[p.requested_role] || ''}` : ''}${p.requested_role === 'supervisor' && p.track_id ? ` (${esc(trackName(p.track_id))})` : ''}${S.circles.some((c) => c.teacher_id === p.id) ? ` (${esc(S.circles.filter((c) => c.teacher_id === p.id).map((c) => c.name).join('، '))})` : ''}</div></div><button class="btn sm" data-edit="${esc(p.id)}">تفعيل</button></div>`).join('')}
   </div></section>` : ''}
   <section class="sheet"><h2>حضور مشرفات الحلقات</h2>
     <label class="field" style="max-width:220px;margin-bottom:12px">اليوم<input class="input" type="date" id="sDate" value="${STF.date}" max="${today()}"></label>
@@ -996,7 +1019,8 @@ function profileForm(p) {
   modal(`<h2>${p.role === 'pending' ? 'تفعيل الحساب' : 'بيانات الحساب'}</h2>
     <form class="form-grid" id="pf">
       <label class="field full">الاسم<input class="input" name="full_name" required value="${esc(p.full_name)}"></label>
-      ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b></p>` : ''}
+      ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b>${p.requested_role === 'supervisor' && p.track_id ? `، مسار ${esc(trackName(p.track_id))}` : ''}${(p.requested_circles || []).length ? `، الحلقات: ${esc(p.requested_circles.map((id) => circleById(+id)?.name).filter(Boolean).join('، '))}` : ''}</p>` : ''}
+      ${S.circles.some((c) => c.teacher_id === p.id) ? `<p class="full" style="color:var(--olive-deep);font-size:.88rem">مربوطة بحلقات: ${esc(S.circles.filter((c) => c.teacher_id === p.id).map((c) => c.name).join('، '))}</p>` : ''}
       <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
       <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>

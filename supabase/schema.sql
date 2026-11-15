@@ -222,18 +222,50 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- إنشاء ملف تلقائي عند التسجيل. أوَّل حساب يُنشأ يصبح مديرة المقرأة.
--- الدخول بالبريد الإلكتروني، ودور القائدة محجوز لبريد القائدة فقط (غيِّريه لمقرأة أخرى)
+-- الحلقات التي اختارتها المشرفة عند التسجيل
+alter table public.profiles add column if not exists requested_circles bigint[];
+
+-- قائمة المسارات والحلقات لصفحة التسجيل (أسماء فقط، قبل الدخول)
+create or replace function public.signup_options() returns json
+language sql stable security definer set search_path = public as $$
+  select json_build_object(
+    'tracks', coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.sort_order, t.id) from public.tracks t), '[]'::json),
+    'circles', coalesce((select json_agg(json_build_object('id', c.id, 'name', c.name, 'track_id', c.track_id, 'taken', c.teacher_id is not null) order by c.id)
+                         from public.circles c where c.active), '[]'::json)
+  )
+$$;
+grant execute on function public.signup_options() to anon, authenticated;
+
+-- عند التسجيل: الدخول بالبريد، ودور القائدة لبريدها فقط (غيِّريه لمقرأة أخرى)،
+-- ويُحفظ المسار لمسؤولة المسار، وتُربط المشرفة بحلقاتها الشاغرة مباشرة
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare
+  req_role text := new.raw_user_meta_data->>'requested_role';
+  req_track bigint;
+  req_circles bigint[];
 begin
-  insert into public.profiles (id, full_name, username, role, requested_role)
+  if coalesce(new.raw_user_meta_data->>'requested_track', '') ~ '^\d+$' then
+    req_track := (new.raw_user_meta_data->>'requested_track')::bigint;
+    if not exists (select 1 from public.tracks where id = req_track) then req_track := null; end if;
+  end if;
+  select array_agg(x::bigint) into req_circles
+  from jsonb_array_elements_text(case when jsonb_typeof(new.raw_user_meta_data->'requested_circles') = 'array'
+                                      then new.raw_user_meta_data->'requested_circles' else '[]'::jsonb end) x
+  where x ~ '^\d+$';
+  insert into public.profiles (id, full_name, username, role, requested_role, track_id, requested_circles)
   values (
     new.id,
     coalesce(nullif(new.raw_user_meta_data->>'full_name', ''), split_part(new.email, '@', 1)),
     lower(new.email),
     case when lower(new.email) = 'withaq123f@gmail.com' then 'admin' else 'pending' end,
-    new.raw_user_meta_data->>'requested_role'
+    req_role,
+    case when req_role = 'supervisor' then req_track end,
+    case when req_role = 'teacher' then req_circles end
   );
+  if req_role = 'teacher' and req_circles is not null then
+    update public.circles set teacher_id = new.id where id = any(req_circles) and teacher_id is null;
+  end if;
   return new;
 end $$;
 revoke execute on function public.handle_new_user() from public, anon, authenticated;
