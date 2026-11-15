@@ -1,0 +1,1562 @@
+/* =========================================================
+   حلقات وثاق القرآنية — منطق الموقع
+   يعمل بقاعدة Supabase، أو بنسخة تجريبية إن لم تُضبط الإعدادات
+   ========================================================= */
+'use strict';
+
+const CFG = window.WITHAQ_CONFIG || {};
+const SITE = {
+  name: CFG.SITE_NAME || 'حلقات وثاق القرآنية',
+  tagline: CFG.TAGLINE || 'أفئدةٌ تُضاء بالوحي',
+};
+const LOGO = 'assets/logo.png';
+const MARK = 'assets/mark.png';
+const USER_DOMAIN = 'withaq.app'; // يُحوَّل اسم المستخدمة إلى بريد داخلي لا يُرسَل إليه شيء
+
+/* ---------------- السور وعدد آياتها ---------------- */
+const SURAHS = [
+  ['الفاتحة',7],['البقرة',286],['آل عمران',200],['النساء',176],['المائدة',120],['الأنعام',165],['الأعراف',206],['الأنفال',75],['التوبة',129],['يونس',109],
+  ['هود',123],['يوسف',111],['الرعد',43],['إبراهيم',52],['الحجر',99],['النحل',128],['الإسراء',111],['الكهف',110],['مريم',98],['طه',135],
+  ['الأنبياء',112],['الحج',78],['المؤمنون',118],['النور',64],['الفرقان',77],['الشعراء',227],['النمل',93],['القصص',88],['العنكبوت',69],['الروم',60],
+  ['لقمان',34],['السجدة',30],['الأحزاب',73],['سبأ',54],['فاطر',45],['يس',83],['الصافات',182],['ص',88],['الزمر',75],['غافر',85],
+  ['فصلت',54],['الشورى',53],['الزخرف',89],['الدخان',59],['الجاثية',37],['الأحقاف',35],['محمد',38],['الفتح',29],['الحجرات',18],['ق',45],
+  ['الذاريات',60],['الطور',49],['النجم',62],['القمر',55],['الرحمن',78],['الواقعة',96],['الحديد',29],['المجادلة',22],['الحشر',24],['الممتحنة',13],
+  ['الصف',14],['الجمعة',11],['المنافقون',11],['التغابن',18],['الطلاق',12],['التحريم',12],['الملك',30],['القلم',52],['الحاقة',52],['المعارج',44],
+  ['نوح',28],['الجن',28],['المزمل',20],['المدثر',56],['القيامة',40],['الإنسان',31],['المرسلات',50],['النبأ',40],['النازعات',46],['عبس',42],
+  ['التكوير',29],['الانفطار',19],['المطففين',36],['الانشقاق',25],['البروج',22],['الطارق',17],['الأعلى',19],['الغاشية',26],['الفجر',30],['البلد',20],
+  ['الشمس',15],['الليل',21],['الضحى',11],['الشرح',8],['التين',8],['العلق',19],['القدر',5],['البينة',8],['الزلزلة',8],['العاديات',11],
+  ['القارعة',11],['التكاثر',8],['العصر',3],['الهمزة',9],['الفيل',5],['قريش',4],['الماعون',7],['الكوثر',3],['الكافرون',6],['النصر',3],
+  ['المسد',5],['الإخلاص',4],['الفلق',5],['الناس',6],
+];
+const AYAH_START = []; // الفهرس العام لأوَّل آية في كل سورة
+{ let acc = 0; for (const [, n] of SURAHS) { AYAH_START.push(acc); acc += n; } }
+const ayahIndex = (s, a) => AYAH_START[s - 1] + (a - 1);
+function rangeCount(fs, fa, ts, ta) {
+  if (!fs || !fa || !ts || !ta) return 0;
+  return Math.abs(ayahIndex(ts, ta) - ayahIndex(fs, fa)) + 1;
+}
+const posText = (s, a) => (s ? `${SURAHS[s - 1][0]} ${a || ''}`.trim() : '');
+function rangeText(fs, fa, ts, ta) {
+  if (!fs || !ts) return '';
+  if (fs === ts) return `${SURAHS[fs - 1][0]} ${fa}–${ta}`;
+  return `${posText(fs, fa)} ← ${posText(ts, ta)}`;
+}
+function nextPos(s, a) {
+  if (!s) return null;
+  if (a < SURAHS[s - 1][1]) return [s, a + 1];
+  return s < 114 ? [s + 1, 1] : [s, a];
+}
+
+/* ---------------- مسمَّيات ---------------- */
+const ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'مستأذنة' };
+const STAFF_ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'معتذرة' };
+const CTYPE = { memo_review: 'حفظ ومراجعة', fixation: 'تثبيت', unified: 'حفظ موحَّد' };
+const DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const WEEK_ORDER = [6, 0, 1, 2, 3, 4, 5]; // يبدأ الأسبوع بالسبت
+function daysText(days = []) {
+  const ord = WEEK_ORDER.filter((d) => days.includes(d));
+  if (!ord.length) return 'لم تُحدَّد الأيام';
+  const pos = ord.map((d) => WEEK_ORDER.indexOf(d));
+  const consecutive = pos.every((p, i) => !i || p === pos[i - 1] + 1);
+  if (consecutive && ord.length > 2) return `من ${DAYS[ord[0]]} إلى ${DAYS[ord[ord.length - 1]]}`;
+  return ord.map((d) => DAYS[d]).join('، ');
+}
+// يوم البطاقة: المسارات اليومية في أيامها، والأسبوعية في يوم السرد فقط
+function isEntryDay(track, date) {
+  if (!track) return false;
+  const wd = new Date(date + 'T12:00:00').getDay();
+  if (track.entry_mode === 'weekly') return wd === (track.sard_day ?? (track.days || []).slice(-1)[0]);
+  return (track.days || []).includes(wd);
+}
+function lastEntryDay(track, upTo) {
+  let d = upTo;
+  for (let i = 0; i < 7; i++) { if (isEntryDay(track, d)) return d; d = addDays(d, -1); }
+  return upTo;
+}
+// ---- توقيت مكة (UTC+3) لمهام مسؤولات المسارات: تُغلق مهام اليوم الساعة ٥ صباحًا من اليوم التالي ----
+function meccaNow() { return new Date(Date.now() + 3 * 3600e3); }
+function taskDay() {
+  const m = meccaNow(); if (m.getUTCHours() < 5) m.setUTCDate(m.getUTCDate() - 1);
+  return `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, '0')}-${String(m.getUTCDate()).padStart(2, '0')}`;
+}
+function taskDeadline(d) { const [y, mo, da] = d.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, da + 1, 2, 0, 0)); } // ٥ص مكة = ٢ UTC
+function taskOpen(d) { return d <= taskDay() && Date.now() < taskDeadline(d).getTime(); }
+function timeLeft(d) {
+  const ms = taskDeadline(d).getTime() - Date.now(); if (ms <= 0) return '';
+  const h = Math.floor(ms / 3600e3); const m = Math.floor((ms % 3600e3) / 60e3);
+  return h ? `${h} ساعة و${m} دقيقة` : `${m} دقيقة`;
+}
+const GRADE = { excellent: 'ممتاز', good: 'جيد', repeat: 'تحتاج إعادة' };
+const ROLE = { admin: 'القائدة', supervisor: 'مسؤولة مسار', teacher: 'مشرفة حلقة', instructor: 'معلِّمة حلقة', student: 'طالبة', pending: 'بانتظار التفعيل', disabled: 'موقوفة' };
+const ACTIVE_ROLES = ['admin', 'supervisor', 'teacher', 'instructor', 'student'];
+
+/* ---------------- أدوات عامة ---------------- */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pad = (n) => String(n).padStart(2, '0');
+const dateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const today = () => dateStr(new Date());
+function addDays(s, n) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return dateStr(d); }
+function monthStart() { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`; }
+const LOCALE = 'ar-u-nu-latn';
+function fmtDate(s, opts = { weekday: 'long', day: 'numeric', month: 'long' }) {
+  try { return new Date(s + 'T12:00:00').toLocaleDateString(LOCALE, opts); } catch { return s; }
+}
+const fmtShort = (s) => fmtDate(s, { day: 'numeric', month: 'short' });
+const firstName = (n) => { const w = String(n || '').trim().split(/\s+/); return (['بنت', 'أم', 'ام'].includes(w[0]) && w[1] ? `${w[0]} ${w[1]}` : w[0]) || ''; };
+const initial = (n) => String(n || '؟').trim().charAt(0);
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+const byName = (a, b) => String(a.full_name || a.name).localeCompare(String(b.full_name || b.name), 'ar', { numeric: true });
+
+function toast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+function modal(html, onMount) {
+  const bg = document.createElement('div');
+  bg.className = 'veil';
+  bg.innerHTML = `<div class="dialog" role="dialog" aria-modal="true">${html}</div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  bg.addEventListener('click', (e) => { if (e.target === bg || e.target.closest('[data-close]')) close(); });
+  onMount && onMount(bg.firstElementChild, close);
+  const first = bg.querySelector('input,select,textarea');
+  first && setTimeout(() => first.focus(), 50);
+  return close;
+}
+
+function confirmBox(text, okLabel = 'تأكيد') {
+  return new Promise((resolve) => {
+    modal(`<h2>${esc(text)}</h2><div class="actions"><button class="btn danger" data-ok>${esc(okLabel)}</button><button class="btn ghost" data-close>إلغاء</button></div>`,
+      (m, close) => { m.querySelector('[data-ok]').onclick = () => { close(); resolve(true); }; m.parentElement.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === m.parentElement) resolve(false); }); });
+  });
+}
+
+function surahOptions(selected, placeholder = 'السورة') {
+  let o = `<option value="">${placeholder}</option>`;
+  SURAHS.forEach(([n], i) => { o += `<option value="${i + 1}"${+selected === i + 1 ? ' selected' : ''}>${i + 1}. ${n}</option>`; });
+  return o;
+}
+
+function downloadCSV(name, header, rows) {
+  const line = (r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
+  const csv = '﻿' + [line(header), ...rows.map(line)].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `${name}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+function translateError(msg = '') {
+  const m = String(msg).toLowerCase();
+  if (m.includes('row-level security') || m.includes('permission')) return 'ليست لديكِ صلاحية لهذا الإجراء';
+  if (m.includes('already registered') || m.includes('duplicate key') && m.includes('username')) return 'اسم المستخدمة محجوز، اختاري اسمًا آخر';
+  if (m.includes('duplicate key')) return 'هذا السجل موجود مسبقًا';
+  if (m.includes('foreign key')) return 'لا يمكن الحذف لوجود بيانات مرتبطة به';
+  if (m.includes('password')) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
+  if (m.includes('failed to fetch') || m.includes('network')) return 'تعذَّر الاتصال، تأكدي من الإنترنت';
+  return msg || 'حدث خطأ غير متوقع';
+}
+
+/* =========================================================
+   طبقة البيانات — واجهة واحدة لنسختين
+   ========================================================= */
+function applyFilters(rows, f = {}) {
+  return rows.filter((r) =>
+    Object.entries(f.eq || {}).every(([k, v]) => r[k] === v) &&
+    Object.entries(f.in || {}).every(([k, v]) => v.includes(r[k])) &&
+    Object.entries(f.gte || {}).every(([k, v]) => r[k] >= v) &&
+    Object.entries(f.lte || {}).every(([k, v]) => r[k] <= v));
+}
+
+function supabaseBackend() {
+  let sb;
+  const email = (u) => `${String(u).trim().toLowerCase()}@${USER_DOMAIN}`;
+  const run = async (p) => { const { data, error } = await p; if (error) throw new Error(translateError(error.message)); return data; };
+  const loadScript = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('تعذَّر تحميل مكتبة Supabase')); document.head.appendChild(s); });
+  return {
+    mode: 'live',
+    async init() {
+      await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
+      sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    },
+    async currentProfile() {
+      const { data } = await sb.auth.getSession();
+      if (!data.session) return null;
+      return run(sb.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle());
+    },
+    async signIn(u, p) {
+      const { error } = await sb.auth.signInWithPassword({ email: email(u), password: p });
+      if (error) throw new Error('اسم المستخدمة أو كلمة المرور غير صحيحة');
+    },
+    async signUp(name, u, p, requested) {
+      const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, username: String(u).trim().toLowerCase(), requested_role: requested || null } } });
+      if (error) throw new Error(translateError(error.message));
+      if (!data.session) throw new Error('أُنشئ الحساب، لكن تأكيد البريد مفعَّل في Supabase — أوقفيه من الإعدادات ثم سجِّلي الدخول');
+    },
+    signOut: () => sb.auth.signOut(),
+    async changePassword(p) { await run(sb.auth.updateUser({ password: p })); },
+    async list(table, f = {}) {
+      const out = []; const step = 1000;
+      for (let from = 0; ; from += step) {
+        let q = sb.from(table).select('*');
+        for (const [k, v] of Object.entries(f.eq || {})) q = q.eq(k, v);
+        for (const [k, v] of Object.entries(f.in || {})) q = q.in(k, v.length ? v : [-1]);
+        for (const [k, v] of Object.entries(f.gte || {})) q = q.gte(k, v);
+        for (const [k, v] of Object.entries(f.lte || {})) q = q.lte(k, v);
+        const rows = await run(q.order('id').range(from, from + step - 1));
+        out.push(...rows);
+        if (rows.length < step) break;
+      }
+      return out;
+    },
+    insert: (t, row) => run(sb.from(t).insert(row).select().single()),
+    update: (t, id, patch) => run(sb.from(t).update(patch).eq('id', id).select().single()),
+    remove: (t, id) => run(sb.from(t).delete().eq('id', id)),
+    upsert: (t, rows, onConflict) => run(sb.from(t).upsert(rows, { onConflict }).select()),
+  };
+}
+
+function demoBackend() {
+  const KEY = 'withaq-demo-v7';
+  let db = null; let me = null;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* التخزين غير متاح */ } };
+  const nextId = (t) => (db[t].reduce((m, r) => (typeof r.id === 'number' ? Math.max(m, r.id) : m), 0) + 1);
+  return {
+    mode: 'demo',
+    async init() {
+      try { db = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { db = null; }
+      if (!db || db.seededOn !== today()) { db = seedDemo(); save(); }
+      try { me = sessionStorage.getItem(KEY + '-me'); } catch { me = null; }
+    },
+    async currentProfile() { return db.profiles.find((p) => p.id === me) || null; },
+    async signInAs(id) { me = id; try { sessionStorage.setItem(KEY + '-me', id); } catch { /* */ } },
+    async signIn() { throw new Error('في النسخة التجريبية اختاري أحد أزرار الدخول بالأسفل'); },
+    async signUp() { throw new Error('إنشاء الحسابات يعمل بعد ربط الموقع بقاعدة البيانات'); },
+    async signOut() { me = null; try { sessionStorage.removeItem(KEY + '-me'); } catch { /* */ } },
+    async changePassword() { throw new Error('غير متاح في النسخة التجريبية'); },
+    async list(t, f) { return applyFilters(db[t], f).map((r) => ({ ...r })); },
+    async insert(t, row) { const r = { id: nextId(t), created_at: new Date().toISOString(), ...row }; db[t].push(r); save(); return { ...r }; },
+    async update(t, id, patch) { const r = db[t].find((x) => x.id === id); Object.assign(r, patch); save(); return { ...r }; },
+    async remove(t, id) {
+      if (t === 'tracks' && db.circles.some((c) => c.track_id === id)) throw new Error(translateError('foreign key'));
+      if (t === 'circles') {
+        const eids = new Set(db.enrollments.filter((e) => e.circle_id === id).map((e) => e.id));
+        db.daily_records = db.daily_records.filter((r) => !eids.has(r.enrollment_id));
+        db.enrollments = db.enrollments.filter((e) => e.circle_id !== id);
+        db.daily_tasks = db.daily_tasks.filter((x) => x.circle_id !== id);
+      }
+      db[t] = db[t].filter((x) => x.id !== id); save();
+    },
+    async upsert(t, rows, onConflict) {
+      const keys = onConflict.split(',');
+      const out = rows.map((row) => {
+        const ex = db[t].find((r) => keys.every((k) => r[k] === row[k]));
+        if (ex) { Object.assign(ex, row); return { ...ex }; }
+        const r = { id: nextId(t), ...row }; db[t].push(r); return { ...r };
+      });
+      save(); return out;
+    },
+  };
+}
+
+function seedDemo() {
+  let seed = 11;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const TR = [
+    ['كنف', null, 'ناشئة', 'memo_review', [0, 1, 2]], ['بُنيان', null, 'أطفال', 'memo_review', [0, 1, 2]],
+    ['تمكين', null, 'خاتمات', 'fixation', [0, 1, 2, 3, 4]], ['رِكاز', 'حفظ حُر، رواية حفص', 'جامعيات', 'memo_review', [0, 1, 2, 3]],
+    ['وثيق', 'حفظ حُر، رواية حفص', 'جامعيات', 'memo_review', [0, 1, 2, 3]], ['ثبات', 'حفظ موحَّد', 'جامعيات', 'unified', [0, 1, 2, 3]],
+    ['رتاد', 'حفظ حُر، رواية ورش', 'جامعيات', 'memo_review', [0, 1, 2, 3]], ['النور', 'حفظ حُر', 'جامعيات', 'memo_review', [6, 0, 1, 2, 3]],
+    ['ضياء', 'تلقين للمبتدئات', 'جامعيات', 'memo_review', [6, 0, 1, 2, 3]], ['وهج', null, 'خاتمات', 'fixation', [0, 1, 2, 3, 4]],
+  ];
+  const CARD_A = ['عدد أوجه الحفظ', 'عدد أوجه المراجعة', 'سماع القارئ'];
+  const CARD_NOOR = [...CARD_A, 'قراءة التفسير'];
+  const CARD_B = ['مقدار الحفظ', 'مقدار المراجعة', 'سماع القارئ', 'قراءة التفسير'];
+  const CARD_C = ['مقدار الحفظ الجديد', 'مقدار المراجعة التراكمية', 'مقدار المراجعة القديمة', 'سماع النصاب', 'التسميع مع الرفيقة'];
+  const CARD_D = ['اسم السورة', 'مقدار الحفظ', 'مقدار المراجعة', 'سماع النصاب'];
+  const tracks = TR.map(([name, description, category, circle_type, days], i) => ({ id: i + 1, name, description, category, circle_type, days, sort_order: i + 1,
+    card_items: name === 'ضياء' ? CARD_B : name === 'النور' ? CARD_NOOR : circle_type === 'fixation' ? CARD_C : circle_type === 'unified' ? CARD_D : CARD_A,
+    entry_mode: ['أطفال', 'ناشئة'].includes(category) ? 'weekly' : 'daily',
+    sard_day: circle_type === 'fixation' ? null : ['أطفال', 'ناشئة'].includes(category) ? 3 : 4 }));
+  const leadNames = ['خديجة سيدي محمد', 'آمنة الشيخ', 'زينب المختار', 'عائشة محمد الأمين', 'مريم يحيى', 'فاطمة الحسن', 'صفية أحمدو', 'رقية إبراهيم', 'حفصة محمود', 'أسماء عبد الله'];
+  const supNames = ['مريم أحمد', 'سكينة محمد', 'الغالية سيدي', 'منى الشيخ', 'نجاة المختار', 'هاجر أحمدو', 'سمية الأمين', 'جويرية يحيى', 'ميمونة الحسن', 'أمينة إبراهيم', 'لالة محمود', 'مكفولة عبد الله'];
+  const teacherNames = ['أم الخير محمد', 'السالكة أحمد', 'بنت الشيخ سيدي', 'آمنة المختار', 'زينب أحمدو', 'فاطمة الأمين'];
+  const profiles = [{ id: 'u-admin', full_name: 'قائدة المقرأة', username: 'leader', role: 'admin', track_id: null }];
+  // مسؤولة المسار التجريبية (u-sup1) لمسار رِكاز
+  const leadOrder = [3, 0, 1, 2, 4, 5, 6, 7, 8, 9];
+  leadOrder.forEach((ti, k) => profiles.push({ id: k === 0 ? 'u-sup1' : `u-lead${ti}`, full_name: leadNames[k], username: `lead${ti}`, role: 'supervisor', track_id: ti + 1 }));
+  profiles.push({ id: 'u-new', full_name: 'أم كلثوم الحسن', username: 'oumkalthoum', role: 'pending', track_id: null, requested_role: 'instructor' });
+
+  const circles = []; let cid = 0; let supK = 0;
+  tracks.forEach((t) => {
+    for (let i = 1; i <= 10; i++) {
+      cid++;
+      let teacher_id = null;
+      if (i <= 2 && supK < supNames.length) {
+        const id = supK === 0 ? 'u-t1' : `u-cs${supK}`;
+        profiles.push({ id, full_name: supNames[supK], username: `cs${supK}`, role: 'teacher', track_id: null });
+        teacher_id = id; supK++;
+      }
+      circles.push({ id: cid, name: `${t.name} ${i}`, track_id: t.id, teacher_id, teacher_name: i <= 3 ? pick(teacherNames) : null, schedule: null, active: true });
+    }
+  });
+  // ترتيب: حلقة رِكاز 1 هي حلقة المشرفة التجريبية
+  const rikaz1 = circles.find((c) => c.name === 'رِكاز 1'); const first = circles.find((c) => c.teacher_id === 'u-t1');
+  [first.teacher_id, rikaz1.teacher_id] = [rikaz1.teacher_id, first.teacher_id];
+  // معلِّمات بحسابات: معلِّمة تجريبية لحلقة رِكاز 1 وحلقة أخرى
+  profiles.push({ id: 'u-ins1', full_name: 'آمنة المختار', username: 'amna', role: 'instructor', track_id: null });
+  profiles.push({ id: 'u-ins2', full_name: 'زينب أحمدو', username: 'zeinab', role: 'instructor', track_id: null });
+  rikaz1.instructor_id = 'u-ins1'; rikaz1.teacher_name = null;
+  // المشرفة التجريبية تشرف على ثلاث حلقات، منها حلقة أسبوعية من مسار كنف
+  circles.find((c) => c.name === 'رِكاز 2').teacher_id = 'u-t1';
+  circles.find((c) => c.name === 'كنف 1').teacher_id = 'u-t1';
+  const rikaz2 = circles.find((c) => c.name === 'رِكاز 2'); rikaz2.instructor_id = 'u-ins1'; rikaz2.teacher_name = null;
+  const noor1 = circles.find((c) => c.name === 'النور 1'); noor1.instructor_id = 'u-ins2'; noor1.teacher_name = null;
+
+  const fn = ['مريم', 'خديجة', 'فاطمة', 'عائشة', 'آمنة', 'زينب', 'حفصة', 'سكينة', 'رقية', 'أسماء', 'صفية', 'ميمونة', 'هاجر', 'سمية', 'جويرية', 'أم الخير', 'الغالية', 'منى', 'نجاة', 'لالة', 'السالكة', 'بنت الشيخ', 'مكفولة', 'أمينة', 'خدجة', 'تسلم', 'ماريا', 'عزيزة'];
+  const ln = ['محمد', 'أحمد', 'سيدي', 'الشيخ', 'عبد الله', 'المختار', 'أحمدو', 'الأمين', 'إبراهيم', 'يحيى', 'الحسن', 'محمود', 'البشير', 'الطالب'];
+  const students = []; const enrollments = []; const records = []; const daily_tasks = [];
+  const used = new Set(); let sid = 0;
+  circles.forEach((c) => {
+    const n = (+c.name.split(' ').pop()) <= 3 ? 4 : 0; // طالبات تجريبيات في أول ثلاث حلقات من كل مسار
+    for (let i = 0; i < n; i++) {
+      let name; do { name = `${pick(fn)} ${pick(ln)}`; } while (used.has(name));
+      used.add(name); sid++;
+      students.push({ id: sid, full_name: name, phone: `4${Math.floor(1000000 + rnd() * 8999999)}`, guardian_phone: '', birth_year: null, notes: '', joined_at: addDays(today(), -60 - Math.floor(rnd() * 200)), active: true });
+      enrollments.push({ id: sid, student_id: sid, circle_id: c.id, active: true, started_at: addDays(today(), -90) });
+    }
+  });
+  // حساب طالبة تجريبي مرتبط بأول طالبة في رِكاز 1
+  const stuEnr = enrollments.find((e) => e.circle_id === rikaz1.id);
+  profiles.push({ id: 'u-stu1', full_name: students.find((x) => x.id === stuEnr.student_id).full_name, username: 'student1', role: 'student', track_id: null, student_id: stuEnr.student_id });
+  profiles.push({ id: 'u-new2', full_name: 'سمية البشير', username: 'soumaya', role: 'pending', track_id: null, requested_role: 'student' });
+  const trackOf = (c) => tracks.find((t) => t.id === c.track_id);
+  let rid = 0;
+  enrollments.forEach((e) => {
+    const c = circles.find((x) => x.id === e.circle_id); const t = trackOf(c);
+    let s = t.category === 'أطفال' ? 78 + Math.floor(rnd() * 25) : 2 + Math.floor(rnd() * 40); let a = 1;
+    const weak = rnd() < 0.15;
+    for (let d = 35; d >= 0; d--) {
+      const date = addDays(today(), -d);
+      if (!isEntryDay(t, date)) continue;
+      if (d === 0 && c.id % 3 === 0) continue;
+      const r = rnd();
+      const attendance = r < (weak ? 0.3 : 0.07) ? 'absent' : r < (weak ? 0.4 : 0.13) ? 'late' : r < (weak ? 0.46 : 0.17) ? 'excused' : 'present';
+      const row = { id: ++rid, enrollment_id: e.id, record_date: date, attendance, grade: null, note: '', entered_by: c.teacher_id };
+      if (attendance === 'present' || attendance === 'late') {
+        const rs = Math.max(1, s - 1);
+        const rev = { review_from_surah: rs, review_from_ayah: 1, review_to_surah: rs, review_to_ayah: Math.min(SURAHS[rs - 1][1], 10 + Math.floor(rnd() * 25)) };
+        if (t.circle_type !== 'fixation') {
+          const step = t.category === 'أطفال' ? 2 + Math.floor(rnd() * 3) : 5 + Math.floor(rnd() * 8);
+          const toA = Math.min(SURAHS[s - 1][1], a + step - 1);
+          Object.assign(row, { memo_from_surah: s, memo_from_ayah: a, memo_to_surah: s, memo_to_ayah: toA });
+          if (toA >= SURAHS[s - 1][1]) { s = Math.min(114, s + 1); a = 1; } else a = toA + 1;
+        }
+        Object.assign(row, rev);
+        row.memo_pages = row.memo_to_surah ? Math.round(rangeCount(row.memo_from_surah, row.memo_from_ayah, row.memo_to_surah, row.memo_to_ayah) * 604 / 6236 * 10) / 10 || 0.5 : null;
+        row.review_pages = 2 + Math.floor(rnd() * 8);
+        // بطاقة الواتساب: كل بند فارغ أو «لا» تقصير
+        const vals = { 'سماع القارئ': 'نعم', 'سماع النصاب': 'نعم', 'قراءة التفسير': 'نعم', 'التسميع مع الرفيقة': 'تم', 'اسم السورة': row.memo_to_surah ? SURAHS[row.memo_from_surah - 1][0] : '' };
+        row.card = t.card_items.map((label) => {
+          let value = vals[label] ?? (/مراجع/.test(label) ? `${row.review_pages} أوجه` : row.memo_pages ? `${row.memo_pages}` : '');
+          if (rnd() < (weak ? 0.25 : 0.05)) value = rnd() < 0.5 ? '' : 'لا';
+          return { label, value, ok: !!value && value !== 'لا' };
+        });
+        row.shortcoming_items = row.card.filter((x) => !x.ok).map((x) => x.label);
+        row.shortcoming = row.shortcoming_items.length > 0;
+      }
+      records.push(row);
+    }
+  });
+  // مهام مسؤولات المسارات للأيام الماضية واليوم
+  let tid = 0; const td = taskDay();
+  for (let d = 14; d >= 0; d--) {
+    const date = addDays(td, -d); const wd = new Date(date + 'T12:00:00').getDay();
+    tracks.forEach((t, ti) => {
+      if (!isEntryDay(t, date)) return;
+      const doneShare = d === 0 ? [1, 0.6, 0, 1, 0.3, 0, 1, 0.8, 0, 1][ti] : (rnd() < 0.85 ? 1 : 0.5);
+      circles.filter((c) => c.track_id === t.id).forEach((c, k) => {
+        if (k >= Math.round(doneShare * 10)) return;
+        const n = enrollments.filter((e) => e.circle_id === c.id).length || 8 + Math.floor(rnd() * 6);
+        const absent = Math.floor(rnd() * 3); const excused = Math.floor(rnd() * 2);
+        daily_tasks.push({ id: ++tid, circle_id: c.id, task_date: date, present_count: Math.max(0, n - absent - excused), absent_count: absent, excused_count: excused, done_by: null, updated_at: new Date().toISOString() });
+      });
+    });
+  }
+  // السرد الأسبوعي لآخر ٤ أسابيع، مع طالبات وصلن الحد وأخريات في الإنذار
+  const weekly_sard = []; let wsid = 0; let forcedLimit = 0; let forcedWarn = 0;
+  enrollments.forEach((e) => {
+    const c = circles.find((x) => x.id === e.circle_id); const t = trackOf(c);
+    const dates = sardDates(t, 4); if (!dates.length) return;
+    if (c.name.endsWith(' 3') && dates[0] === sardDates(t, 1)[0] && t.name === 'وثيق') return; // حلقة لم يُسجَّل سردها
+    let pattern = dates.map(() => rnd() < 0.88);
+    if (forcedLimit < 3 && rnd() < 0.12) { pattern[0] = false; pattern[1] = false; forcedLimit++; }
+    else if (forcedWarn < 4 && rnd() < 0.12) { pattern[0] = false; pattern[1] = true; forcedWarn++; }
+    dates.forEach((d, i) => weekly_sard.push({ id: ++wsid, enrollment_id: e.id, sard_date: d, done: pattern[i], note: null, recorded_by: c.teacher_id, updated_at: new Date().toISOString() }));
+  });
+  return { seededOn: today(), profiles, tracks, circles, students, enrollments, daily_records: records, staff_attendance: [], daily_tasks, weekly_sard };
+}
+
+const api = CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY ? supabaseBackend() : demoBackend();
+
+/* =========================================================
+   الحالة والصلاحيات
+   ========================================================= */
+const S = { me: null, profiles: [], tracks: [], circles: [], students: [], enrollments: [] };
+
+async function loadAll() {
+  const [profiles, tracks, circles, students, enrollments] = await Promise.all([
+    api.list('profiles'), api.list('tracks'), api.list('circles'), api.list('students'), api.list('enrollments'),
+  ]);
+  Object.assign(S, { profiles, tracks: tracks.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id), circles: circles.sort(byName), students: students.sort(byName), enrollments });
+}
+
+const role = () => S.me?.role;
+const isAdmin = () => role() === 'admin';
+const isSup = () => role() === 'supervisor';
+const isIns = () => role() === 'instructor';
+const isStu = () => role() === 'student';
+const canEditStudents = () => isAdmin() || isSup();
+const canEnter = () => isAdmin() || isSup() || role() === 'teacher';
+const instructorName = (c) => (c?.instructor_id ? profileName(c.instructor_id) : '') || c?.teacher_name || '';
+const profileName = (id) => S.profiles.find((p) => p.id === id)?.full_name || '—';
+const trackName = (id) => S.tracks.find((t) => t.id === id)?.name || '—';
+const circleById = (id) => S.circles.find((c) => c.id === id);
+const studentById = (id) => S.students.find((s) => s.id === id);
+
+function myCircles(includeInactive = false) {
+  return S.circles.filter((c) => (includeInactive || c.active) && (
+    isAdmin() || (isSup() && c.track_id === S.me.track_id) || (role() === 'teacher' && c.teacher_id === S.me.id)
+    || (isIns() && c.instructor_id === S.me.id)
+    || (isStu() && S.enrollments.some((e) => e.active && e.circle_id === c.id && e.student_id === S.me.student_id))));
+}
+const activeEnrollments = (circleIds) => {
+  const set = new Set(circleIds);
+  return S.enrollments.filter((e) => e.active && set.has(e.circle_id));
+};
+function visibleStudents() {
+  if (isAdmin()) return S.students;
+  if (isStu()) return S.students.filter((s) => s.id === S.me.student_id);
+  const ids = new Set(activeEnrollments(myCircles().map((c) => c.id)).map((e) => e.student_id));
+  return S.students.filter((s) => ids.has(s.id));
+}
+const studentCircles = (sid) => S.enrollments.filter((e) => e.student_id === sid && e.active).map((e) => circleById(e.circle_id)).filter(Boolean);
+
+async function getRecords(from, to, enrollmentIds) {
+  const f = { gte: { record_date: from }, lte: { record_date: to } };
+  if (enrollmentIds) f.in = { enrollment_id: enrollmentIds };
+  return api.list('daily_records', f);
+}
+
+
+/* =========================================================
+   الأجزاء والزخرفة
+   ========================================================= */
+// بداية كل جزء [سورة، آية]
+const JUZ_START = [[1,1],[2,142],[2,253],[3,93],[4,24],[4,148],[5,82],[6,111],[7,88],[8,41],[9,93],[11,6],[12,53],[15,1],[17,1],[18,75],[21,1],[23,1],[25,21],[27,56],[29,46],[33,31],[36,28],[39,32],[41,47],[46,1],[51,31],[58,1],[67,1],[78,1]];
+const JUZ_IDX = JUZ_START.map(([s, a]) => ayahIndex(s, a)).concat([6236]);
+const AYAHS_PER_JUZ = 6236 / 30;
+
+// نسبة ما غطَّته النطاقات من كل جزء
+function juzCoverage(ranges) {
+  const covered = new Uint8Array(6236);
+  for (const [fs, fa, ts, ta] of ranges) {
+    if (!fs || !fa || !ts || !ta) continue;
+    let a = ayahIndex(fs, fa), b = ayahIndex(ts, ta);
+    if (a > b) [a, b] = [b, a];
+    for (let i = a; i <= b && i < 6236; i++) covered[i] = 1;
+  }
+  return JUZ_IDX.slice(0, 30).map((start, j) => {
+    const end = JUZ_IDX[j + 1]; let n = 0;
+    for (let i = start; i < end; i++) n += covered[i];
+    return n / (end - start);
+  });
+}
+
+const HIJRI = (d = new Date()) => { try { return d.toLocaleDateString('ar-u-ca-islamic-umalqura-nu-latn', { day: 'numeric', month: 'long', year: 'numeric' }); } catch { return ''; } };
+
+const ICON = {
+  home: '<path d="M4 10.5 12 4l8 6.5V20H14.5v-5.5h-5V20H4z"/>',
+  entry: '<path d="M5 4h11l3 3v13H5z"/><path d="M8.5 10h7M8.5 13.5h7M8.5 17h4"/>',
+  students: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.7-3.2 2.8-5 5.5-5s4.8 1.8 5.5 5"/><path d="M15.5 5.6a3 3 0 0 1 0 5.8M17.5 14.8c1.7.6 2.7 2.2 3 4.7"/>',
+  reports: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
+  staff: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c.8-3.8 3.3-5.8 6.5-5.8s5.7 2 6.5 5.8"/><path d="M12 14.2 10.6 17 12 20l1.4-3z"/>',
+  settings: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  tasks: '<path d="M9 5h10M9 12h10M9 19h10"/><path d="m3.5 5 1.2 1.2L7 4M3.5 12l1.2 1.2L7 11M3.5 19l1.2 1.2L7 18"/>',
+  sard: '<path d="M4 5.5c2.5-1 5-1 8 1 3-2 5.5-2 8-1V19c-2.5-1-5-1-8 1-3-2-5.5-2-8-1z"/><path d="M12 6.5V20"/>',
+  account: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20.5c1-4 4-6 7.5-6s6.5 2 7.5 6"/>',
+  out: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
+};
+const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
+
+// طرف ترويسة السورة: قوس مزدوج ونجمة ثُمانية
+const CART_END = `<svg class="end" viewBox="0 0 46 74" aria-hidden="true">
+  <path d="M46 8H31C17 8 12 20 9 30c-2 5-2 9 0 14 3 10 8 22 22 22h15z" fill="#fbeef3" stroke="#8fa052" stroke-width="1.5"/>
+  <path d="M46 12H31.5C20 12 16 22 13.5 31c-1.4 4-1.4 8 0 12 2.5 9 6.5 19 18 19H46" fill="none" stroke="#8fa052" stroke-width=".8" opacity=".55"/>
+  <g transform="translate(26 37)"><rect x="-6" y="-6" width="12" height="12" fill="#e99bb8"/><rect x="-6" y="-6" width="12" height="12" fill="#e99bb8" transform="rotate(45)"/><circle r="2.6" fill="#fffcfd"/></g>
+</svg>`;
+const cartouche = (title, sub = '') => `
+  <header class="cartouche">${CART_END}<div class="band"><h1>${esc(title)}</h1></div>${CART_END.replace('class="end"', 'class="end flip"')}</header>
+  ${sub ? `<p class="page-sub">${sub}</p>` : ''}`;
+
+// حلقة الأجزاء الثلاثين
+function juzRing(filled) {
+  const cx = 66, cy = 66, r1 = 46, r2 = 62, n = 30, gap = 2.2;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const a0 = ((i * 360) / n + gap / 2 - 90) * Math.PI / 180;
+    const a1 = (((i + 1) * 360) / n - gap / 2 - 90) * Math.PI / 180;
+    const p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
+    const part = Math.max(0, Math.min(1, filled - i));
+    const fill = part >= 1 ? '#e99bb8' : part > 0 ? '#f3c7d7' : '#f3e7ec';
+    out += `<path class="ring-seg" d="M${p(r2, a0)} A${r2} ${r2} 0 0 1 ${p(r2, a1)} L${p(r1, a1)} A${r1} ${r1} 0 0 0 ${p(r1, a0)} Z" fill="${fill}"/>`;
+  }
+  const laps = Math.floor(filled / 30);
+  return `<svg viewBox="0 0 132 132" role="img" aria-label="${filled.toFixed(1)} جزء">${out}
+    <text x="66" y="66" text-anchor="middle" font-family="Amiri, serif" font-weight="700" font-size="30" fill="#4f5b25">${Math.min(filled, 30).toFixed(filled < 10 ? 1 : 0)}</text>
+    <text x="66" y="86" text-anchor="middle" font-family="Plex Arabic, sans-serif" font-size="10" fill="#a08f97">${laps ? `+${laps} ختمة` : 'من ٣٠ جزءًا'}</text></svg>`;
+}
+
+const attTag = (a) => `<span class="tag ${a === 'present' ? 'olive' : a === 'absent' ? 'red' : a === 'late' ? 'amber' : 'blue'}">${ATT[a]}</span>`;
+
+/* =========================================================
+   الدخول
+   ========================================================= */
+function renderAuth(mode = 'login', error = '') {
+  const demo = api.mode === 'demo';
+  $('#app').innerHTML = `
+  <div class="gate">
+    <section class="gate-art"><div class="frame"></div>
+      <div><img src="${LOGO}" alt="${esc(SITE.name)}"><p class="motto">${esc(SITE.tagline)}</p>
+      <p class="verse">﴿ وَاعْتَصِمُوا بِحَبْلِ اللَّهِ جَمِيعًا وَلَا تَفَرَّقُوا ﴾</p></div>
+    </section>
+    <section class="gate-form"><div class="box">
+      <h2>${mode === 'login' ? 'أهلًا بكِ' : 'حساب جديد'}</h2>
+      <p class="lead">${mode === 'login' ? 'ادخلي لمتابعة حلقاتكِ أو تقدُّمكِ.' : 'للطالبات والمعلِّمات والمشرفات. تُفعِّله القائدة بعد التسجيل.'}</p>
+      <form id="authForm" autocomplete="on">
+        ${mode === 'signup' ? `<label class="field">الاسم الكامل<input class="input" name="name" required></label>
+        <label class="field">نوع الحساب<select class="input" name="requested" required>
+          <option value="student">طالبة</option><option value="instructor">معلِّمة حلقة</option><option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>` : ''}
+        <label class="field">اسم المستخدمة<input class="input" name="username" required dir="ltr" autocomplete="username" pattern="[A-Za-z0-9_.\\-]{3,}" title="حروف إنجليزية أو أرقام، 3 أحرف على الأقل"></label>
+        <label class="field">كلمة المرور<input class="input" name="password" type="password" required minlength="6" dir="ltr" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
+        ${error ? `<div class="error" role="alert">${esc(error)}</div>` : ''}
+        <button class="btn block" type="submit">${mode === 'login' ? 'دخول' : 'إنشاء الحساب'}</button>
+      </form>
+      <p class="switch-line">${mode === 'login' ? 'ليس لديكِ حساب؟<button class="linkish" data-mode="signup">أنشئي حسابًا</button>' : 'لديكِ حساب؟<button class="linkish" data-mode="login">سجِّلي الدخول</button>'}</p>
+      ${demo ? `<div class="demo-pick"><p>هذه نسخة تجريبية ببيانات وهمية. جرِّبيها بأحد الأدوار:</p><div class="row">
+        <button class="btn sm" data-demo="u-admin">القائدة</button>
+        <button class="btn sm olive" data-demo="u-sup1">مسؤولة مسار</button>
+        <button class="btn sm quiet" data-demo="u-t1">مشرفة حلقة</button>
+        <button class="btn sm quiet" data-demo="u-ins1">معلِّمة حلقة</button>
+        <button class="btn sm quiet" data-demo="u-stu1">طالبة</button></div></div>` : ''}
+    </div></section>
+  </div>`;
+  $('[data-mode]').onclick = (e) => renderAuth(e.target.dataset.mode);
+  $$('[data-demo]').forEach((b) => (b.onclick = async () => { await api.signInAs(b.dataset.demo); location.hash = '#/home'; start(); }));
+  $('#authForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target); const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      if (mode === 'signup') await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'));
+      else await api.signIn(fd.get('username'), fd.get('password'));
+      start();
+    } catch (err) { renderAuth(mode, err.message); }
+  };
+}
+
+function renderPending() {
+  const off = role() === 'disabled';
+  $('#app').innerHTML = `<div class="waiting"><img src="${LOGO}" alt="">
+    <h2>${off ? 'حسابكِ موقوف' : `أهلًا ${esc(firstName(S.me.full_name))} 🌸`}</h2>
+    <p>${off ? 'تواصلي مع القائدة لإعادة تفعيله.' : 'أُنشئ حسابكِ، وينتظر تفعيل القائدة وتحديد دوركِ. 🌿'}</p>
+    <button class="btn ghost" id="out">تسجيل الخروج</button></div>`;
+  $('#out').onclick = async () => { await api.signOut(); start(); };
+}
+
+/* =========================================================
+   الهيكل
+   ========================================================= */
+function navItems() {
+  if (isStu()) return [['home', 'تقدُّمي'], ['account', 'حسابي']];
+  const items = [['home', 'الرئيسية']];
+  if (canEnter()) items.push(['entry', 'الإدخال من الواتساب']);
+  items.push(['students', 'الطالبات'], ['reports', 'التقارير']);
+  if (canEnter()) items.push(['sard', 'السرد الأسبوعي']);
+  if (isAdmin() || isSup()) items.push(['tasks', 'المهام اليومية']);
+  if (isAdmin() || isSup()) items.push(['staff', 'الكادر']);
+  if (isAdmin()) items.push(['settings', 'المسارات والحلقات']);
+  items.push(['account', 'حسابي']);
+  return items;
+}
+const SHORT = { sard: 'السرد', home: 'الرئيسية', entry: 'الإدخال', students: 'الطالبات', reports: 'التقارير', tasks: 'المهام', staff: 'الكادر', settings: 'الحلقات', account: 'حسابي' };
+
+function renderShell() {
+  const items = navItems();
+  const pri = isAdmin() ? ['home', 'tasks', 'sard', 'students', 'reports'] : isSup() ? ['home', 'tasks', 'entry', 'sard', 'students'] : ['home', 'entry', 'sard', 'students', 'reports', 'account'];
+  const dockItems = pri.map((k) => items.find(([x]) => x === k)).filter(Boolean).slice(0, 5);
+  $('#app').innerHTML = `
+  <div class="app">
+    <aside class="rail">
+      <a class="brand" href="#/home"><img src="${LOGO}" alt="${esc(SITE.name)}"></a>
+      <nav>${items.filter(([k]) => k !== 'account').map(([k, l]) => `<a class="nav" href="#/${k}" data-nav="${k}">${icon(k)}<span>${l}</span></a>`).join('')}</nav>
+      <a class="me" href="#/account" data-nav="account"><span class="initial">${esc(initial(S.me.full_name))}</span>
+        <span class="who"><b>${esc(S.me.full_name)}</b><span>${ROLE[role()]}${api.mode === 'demo' ? ' (تجريبي)' : ''}</span></span></a>
+    </aside>
+    <div>
+      <header class="topbar"><img src="${MARK}" alt=""><span class="t">${esc(SITE.name)}</span><span class="sp"></span>
+        ${api.mode === 'demo' ? '<span class="trial">تجريبي</span>' : ''}
+        <a href="#/account" aria-label="حسابي"><span class="initial">${esc(initial(S.me.full_name))}</span></a></header>
+      <main id="view"></main>
+    </div>
+    <nav class="dock">${dockItems.map(([k, l]) => `<a href="#/${k}" data-nav="${k}">${icon(k)}<span>${isStu() ? l : SHORT[k]}</span></a>`).join('')}</nav>
+  </div>`;
+}
+
+const PAGES = {};
+async function route() {
+  const [, page = 'home', arg] = (location.hash || '#/home').split('/');
+  const allowed = navItems().map(([k]) => k).concat(['student']);
+  const key = allowed.includes(page) ? page : 'home';
+  $$('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === key || (key === 'student' && a.dataset.nav === 'students')));
+  const v = $('#view');
+  v.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  window.scrollTo(0, 0);
+  try { await PAGES[key](v, arg); } catch (err) { console.error(err); v.innerHTML = `<div class="wrap"><div class="error">${esc(translateError(err.message))}</div></div>`; }
+}
+
+/* =========================================================
+   الرئيسية
+   ========================================================= */
+PAGES.home = async (v) => {
+  if (isStu()) return PAGES.student(v, S.me.student_id);
+  const t = today(); const from = addDays(t, -29); const from14 = addDays(t, -13); const from7 = addDays(t, -6);
+  const circles = myCircles();
+  const enr = activeEnrollments(circles.map((c) => c.id));
+  const enrById = Object.fromEntries(enr.map((e) => [e.id, e]));
+  const recs = (await getRecords(from, t)).filter((r) => enrById[r.enrollment_id]);
+  const r14 = recs.filter((r) => r.record_date >= from14);
+  const todayRecs = recs.filter((r) => r.record_date === t);
+  const came = (r) => r.attendance === 'present' || r.attendance === 'late';
+  const studentCount = new Set(enr.map((e) => e.student_id)).size;
+  const monthPages = recs.filter((r) => r.record_date >= monthStart()).reduce((n, r) => n + memoPages(r), 0);
+
+  const circleRows = circles.filter((c) => isEntryDay(trackOfCircle(c), t)).map((c) => {
+    const ce = enr.filter((e) => e.circle_id === c.id);
+    const done = todayRecs.filter((r) => enrById[r.enrollment_id].circle_id === c.id).length;
+    const cr = r14.filter((r) => enrById[r.enrollment_id].circle_id === c.id);
+    const rate = pct(cr.filter(came).length, cr.length);
+    const st = !ce.length ? ['gray', 'لا طالبات'] : done >= ce.length ? ['olive', 'اكتمل اليوم'] : done ? ['amber', `${done} من ${ce.length}`] : ['red', 'لم يُدخل'];
+    return { c, ce, done, rate, st };
+  }).filter((x) => x.ce.length).sort((a, b) => (a.done >= a.ce.length) - (b.done >= b.ce.length) || a.rate - b.rate);
+  const shownRows = circleRows.slice(0, 10); const hiddenDone = circleRows.length - shownRows.length;
+
+  const abs = {};
+  r14.forEach((r) => { if (r.attendance === 'absent') abs[r.enrollment_id] = (abs[r.enrollment_id] || 0) + 1; });
+  const absentees = Object.entries(abs).filter(([, n]) => n >= 3).map(([id, n]) => ({ e: enrById[id], n })).sort((a, b) => b.n - a.n).slice(0, 6);
+
+  const memo = {};
+  recs.filter((r) => r.record_date >= from7).forEach((r) => {
+    const sid = enrById[r.enrollment_id].student_id;
+    memo[sid] = (memo[sid] || 0) + memoPages(r);
+  });
+  const top = Object.entries(memo).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const scope = isAdmin() ? 'كل حلقات المقرأة' : isSup() ? trackName(S.me.track_id) : circles.map((c) => c.name).join('، ') || 'لم تُسنَد إليكِ حلقة بعد';
+  const juz = monthPages / 20;
+  const shortToday = todayRecs.filter((r) => r.shortcoming).length;
+  const shortBy = {};
+  r14.forEach((r) => { if (r.shortcoming) shortBy[r.enrollment_id] = (shortBy[r.enrollment_id] || 0) + 1; });
+  const shorters = Object.entries(shortBy).filter(([, n]) => n >= 3).map(([id, n]) => ({ e: enrById[id], n })).sort((a, b) => b.n - a.n).slice(0, 6);
+  // شريط المهام اليومية
+  let banner = '';
+  if (isAdmin() || isSup()) {
+    const td = taskDay();
+    const ts = tracksOn(td).filter((t) => isAdmin() || t.id === S.me.track_id);
+    const tcs = S.circles.filter((c) => c.active && ts.some((t) => t.id === c.track_id));
+    const done = tcs.length ? await api.list('daily_tasks', { eq: { task_date: td }, in: { circle_id: tcs.map((c) => c.id) } }) : [];
+    const doneSet = new Set(done.map((x) => x.circle_id));
+    if (tcs.length && isAdmin()) {
+      const full = ts.filter((t) => { const cs = tcs.filter((c) => c.track_id === t.id); return cs.length && cs.every((c) => doneSet.has(c.id)); }).length;
+      banner = `<a class="banner ${full < ts.length ? 'warn' : ''}" href="#/tasks"><span><b>مهام مسؤولات المسارات:</b> أتمَّت ${full} من ${ts.length}</span><span class="s">تُغلق بعد ${timeLeft(td)}</span></a>`;
+    } else if (tcs.length) {
+      const n = tcs.filter((c) => doneSet.has(c.id)).length;
+      banner = `<a class="banner ${n < tcs.length ? 'warn' : ''}" href="#/tasks"><span><b>مهامكِ اليوم:</b> ${n === tcs.length ? 'أتممتِها كلها 🌿' : `أُتمَّت ${n} من ${tcs.length} حلقة`}</span><span class="s">تُغلق بعد ${timeLeft(td)}</span></a>`;
+    }
+  }
+  if (canEnter()) {
+    const so = await sardOverview(myCircles());
+    const lim = so.rows.filter((r) => r.streak >= SARD_LIMIT).length;
+    if (lim) banner += `<a class="banner warn" href="#/sard" style="background:var(--red-wash);border-color:#eec2bf"><span><b>السرد الأسبوعي:</b> ${lim} ${lim === 1 ? 'طالبة وصلت' : lim === 2 ? 'طالبتان وصلتا' : 'طالبات وصلن'} حدَّ الحذف</span><span class="s">عرض</span></a>`;
+    else if (so.missingCircles.length) banner += `<a class="banner warn" href="#/sard"><span><b>السرد الأسبوعي:</b> لم يُسجَّل لـ${so.missingCircles.length} حلقة</span><span class="s">تسجيل</span></a>`;
+  }
+  v.innerHTML = `<div class="wrap">
+  <section class="greet">
+    <div><h1>أهلًا بكِ يا ${esc(firstName(S.me.full_name))} 🌸</h1>
+      <p class="dates">${fmtDate(t)}، <b>${HIJRI()}</b></p>
+      <p class="dates">${esc(scope)}</p></div>
+    <div class="harvest">${juzRing(juz)}<div><div class="big num">${Math.round(monthPages).toLocaleString('en')}</div>
+      <div class="lbl">وجهًا حفظته الطالبات هذا الشهر</div><div class="harvest-juz">تعادل ${juz.toFixed(1)} جزءًا</div></div></div>
+  </section>
+  ${banner}
+  <div class="strip">
+    <div><div class="n rose num">${studentCount}</div><div class="l">طالبة في الحلقات</div></div>
+    <div><div class="n olive num">${todayRecs.filter(came).length}</div><div class="l">حضرن اليوم</div></div>
+    <div><div class="n red num">${todayRecs.filter((r) => r.attendance === 'absent').length}</div><div class="l">غبن اليوم</div></div>
+    <div><div class="n num" style="color:var(--amber)">${shortToday}</div><div class="l">قصَّرن اليوم</div></div>
+  </div>
+  <div class="split">
+    <section class="sheet"><h2>إدخال اليوم <small>الحضور في أسبوعين</small></h2><div class="lines">
+      ${shownRows.map(({ c, rate, st }) => `<a class="line" href="${canEnter() ? '#/entry' : '#/reports'}" data-circle="${c.id}">
+        <div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${esc(c.teacher_id ? profileName(c.teacher_id) : 'بلا مشرفة')}${instructorName(c) ? `، المعلِّمة: ${esc(instructorName(c))}` : ''}</div></div>
+        <div class="meter ${rate < 60 ? 'bad' : rate < 80 ? 'warn' : ''}" title="${rate}%"><i style="width:${rate}%"></i></div>
+        <span class="tag ${st[0]}">${st[1]}</span></a>`).join('') || '<div class="empty">لا توجد حلقات فيها طالبات بعد</div>'}
+      ${hiddenDone > 0 ? `<p class="hint-line" style="padding:8px 4px 0">و${hiddenDone} حلقات أخرى، التفاصيل في التقارير</p>` : ''}
+    </div></section>
+    <section class="sheet"><h2>غياب متكرر <small>٣ مرات فأكثر في أسبوعين</small></h2><div class="lines">
+      ${absentees.map(({ e, n }) => `<a class="line" href="#/student/${e.student_id}"><span class="initial rose">${esc(initial(studentById(e.student_id)?.full_name))}</span>
+        <div class="grow"><div class="t">${esc(studentById(e.student_id)?.full_name)}</div><div class="s">${esc(circleById(e.circle_id)?.name)}</div></div>
+        <span class="tag red">${n} غياب</span></a>`).join('') || '<div class="empty">لا غياب متكرر، الحمد لله 🌿</div>'}
+    </div></section>
+  </div>
+  <div class="split" style="margin-top:16px">
+  <section class="sheet"><h2>تقصير متكرر <small>٣ مرات فأكثر في أسبوعين</small></h2><div class="lines">
+    ${shorters.map(({ e, n }) => `<a class="line" href="#/student/${e.student_id}"><span class="initial rose">${esc(initial(studentById(e.student_id)?.full_name))}</span>
+      <div class="grow"><div class="t">${esc(studentById(e.student_id)?.full_name)}</div><div class="s">${esc(circleById(e.circle_id)?.name)}</div></div>
+      <span class="tag amber">${n} تقصير</span></a>`).join('') || '<div class="empty">لا تقصير متكرر 🌿</div>'}
+  </div></section>
+  <section class="sheet"><h2>الأكثر حفظًا هذا الأسبوع</h2><div class="lines">
+    ${top.map(([sid, n], i) => `<a class="line" href="#/student/${sid}"><span class="rank">${i + 1}</span>
+      <div class="grow"><div class="t">${esc(studentById(+sid)?.full_name)}</div><div class="s">${esc(studentCircles(+sid).map((c) => c.name).join('، '))}</div></div>
+      <span class="tag olive">${fmtPages(n)}</span></a>`).join('') || '<div class="empty">لم يُسجَّل حفظ هذا الأسبوع بعد</div>'}
+  </div></section></div></div>`;
+  $$('[data-circle]', v).forEach((a) => a.addEventListener('click', () => { ENTRY.circleId = +a.dataset.circle; ENTRY.date = today(); }));
+};
+
+/* =========================================================
+   الإدخال اليومي
+   ========================================================= */
+const ENTRY = { circleId: null, date: null, text: '', dateTouched: false };
+const SURAH_INFO = SURAHS.map(([name, ayahs]) => ({ name, ayahs }));
+const surahNo = (name) => { const n = CardKit.norm(name); const i = SURAHS.findIndex(([s]) => CardKit.norm(s) === n); return i >= 0 ? i + 1 : null; };
+const pagesOfRange = (fs, fa, ts, ta) => rangeCount(fs, fa, ts, ta) * 604 / 6236;
+// مقدار الحفظ بالأوجه: من البطاقة، أو محسوبًا من النطاق
+const memoPages = (r) => (r.memo_pages != null ? +r.memo_pages : pagesOfRange(r.memo_from_surah, r.memo_from_ayah, r.memo_to_surah, r.memo_to_ayah));
+const reviewPages = (r) => (r.review_pages != null ? +r.review_pages : pagesOfRange(r.review_from_surah, r.review_from_ayah, r.review_to_surah, r.review_to_ayah));
+const fmtPages = (p) => { const n = Math.round(p * 10) / 10; return `${n} ${n === 1 ? 'وجه' : n === 2 ? 'وجهان' : 'أوجه'}`; };
+const trackOfCircle = (c) => S.tracks.find((t) => t.id === c?.track_id);
+
+PAGES.entry = async (v) => {
+  const circles = myCircles();
+  if (!circles.length) { v.innerHTML = `<div class="wrap">${cartouche('الإدخال من الواتساب')}<div class="sheet empty">لم تُسنَد إليكِ حلقة بعد. تواصلي مع القائدة 🌿</div></div>`; return; }
+  if (!circles.some((c) => c.id === ENTRY.circleId)) ENTRY.circleId = circles[0].id;
+  const circle = circleById(ENTRY.circleId);
+  const track = trackOfCircle(circle);
+  if (!ENTRY.dateTouched || !ENTRY.date) ENTRY.date = track?.entry_mode === 'weekly' ? lastEntryDay(track, today()) : today();
+  // حالة كل حلقة من حلقاتها في هذا اليوم (لمن عندها أكثر من حلقة)
+  let chipStatus = {};
+  if (circles.length > 1 && circles.length <= 8) {
+    const allEnr = activeEnrollments(circles.map((c) => c.id));
+    const recs = allEnr.length ? await getRecords(ENTRY.date, ENTRY.date, allEnr.map((e) => e.id)) : [];
+    const eCircle = Object.fromEntries(allEnr.map((e) => [e.id, e.circle_id]));
+    circles.forEach((c) => { chipStatus[c.id] = { total: allEnr.filter((e) => e.circle_id === c.id).length, done: recs.filter((r) => eCircle[r.enrollment_id] === c.id).length }; });
+  }
+  const template = track?.card_items || [];
+  const enr = activeEnrollments([circle.id]).map((e) => ({ e, s: studentById(e.student_id) })).filter((x) => x.s && x.s.active).sort((a, b) => byName(a.s, b.s));
+  const existing = enr.length ? await getRecords(ENTRY.date, ENTRY.date, enr.map((x) => x.e.id)) : [];
+  const wd = new Date(ENTRY.date + 'T12:00:00').getDay();
+  const offDay = track && !isEntryDay(track, ENTRY.date);
+  const weekly = track?.entry_mode === 'weekly';
+
+  v.innerHTML = `<div class="wrap">
+  ${cartouche('الإدخال من الواتساب', `${esc(circle.name)}، مسار ${esc(track?.name || '')}`)}
+  ${Object.keys(chipStatus).length ? `<div class="circle-chips" role="tablist" aria-label="حلقاتي">${circles.map((c) => { const st = chipStatus[c.id]; const full = st.total && st.done >= st.total;
+      return `<button class="cchip${c.id === circle.id ? ' on' : ''}" data-cid="${c.id}" role="tab" aria-selected="${c.id === circle.id}"><b>${esc(c.name)}</b><small class="${full ? 'ok' : st.done ? 'part' : ''}">${!st.total ? 'لا طالبات' : full ? 'اكتمل' : `${st.done} من ${st.total}`}</small></button>`; }).join('')}</div>` : ''}
+  <div class="entry-head"${Object.keys(chipStatus).length ? ' style="grid-template-columns:1fr"' : ''}>
+    <label class="field${Object.keys(chipStatus).length ? ' hidden' : ''}">الحلقة<select class="input" id="eCircle">${circles.map((c) => `<option value="${c.id}"${c.id === circle.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+    <label class="field">اليوم<input class="input" type="date" id="eDate" value="${ENTRY.date}" max="${today()}"></label>
+  </div>
+  ${weekly ? `<div class="banner"><span>مسار ${esc(track.name)} يرسل <b>بطاقة أسبوعية</b> يوم ${DAYS[track.sard_day ?? 3]} بعد السرد على الأهل، وحفظها يسجِّل السرد الأسبوعي تلقائيًّا.</span></div>` : ''}
+  ${offDay ? `<div class="banner warn"><span>${DAYS[wd]} ليس يوم بطاقات مسار ${esc(track.name)} (${weekly ? `بطاقة أسبوعية يوم ${DAYS[track.sard_day ?? 3]}` : daysText(track.days)}).</span></div>` : ''}
+  <section class="sheet">
+    <h2>بطاقات اليوم <small>${existing.length ? `سبق حفظ ${existing.length} من ${enr.length}، والحفظ الجديد يحدِّثها` : `${enr.length} طالبة في الحلقة`}</small></h2>
+    <p style="color:var(--ink-2);margin-bottom:10px">انسخي بطاقات الطالبات من الواتساب كما هي، والصقيها هنا. يمكن لصق عدة بطاقات معًا.</p>
+    <div class="choices" style="margin-bottom:10px">${template.map((l) => `<span class="tag gray">${esc(l)}</span>`).join('') || '<span class="tag amber">لم تُحدَّد بنود بطاقة هذا المسار</span>'}</div>
+    <textarea class="input cards-box" id="cardsText" placeholder="بطاقة الحضور&#10;الاسم : …&#10;اليوم : …">${esc(ENTRY.text)}</textarea>
+    <button class="btn block" id="readCards" style="margin-top:10px">قراءة البطاقات</button>
+  </section>
+  <div id="review"></div></div>`;
+
+  $('#eCircle').onchange = (e) => { ENTRY.circleId = +e.target.value; ENTRY.text = ''; ENTRY.dateTouched = false; route(); };
+  $$('.cchip', v).forEach((b) => (b.onclick = () => { if (+b.dataset.cid === ENTRY.circleId) return; ENTRY.circleId = +b.dataset.cid; ENTRY.text = ''; route(); }));
+  $('#eDate').onchange = (e) => { if (e.target.value) { ENTRY.date = e.target.value; ENTRY.dateTouched = true; route(); } };
+  $('#cardsText').oninput = (e) => { ENTRY.text = e.target.value; };
+  $('#readCards').onclick = () => readAndReview();
+
+  function readAndReview() {
+    const text = $('#cardsText').value;
+    const cards = CardKit.splitWithaqCards(text);
+    if (!cards.length) { toast('لم أجد بطاقات في النص. تأكدي أن البنود مكتوبة بصيغة «البند : القيمة»', 'bad'); return; }
+    const refs = enr.map((x) => ({ id: x.e.id, name: x.s.full_name }));
+    const parsed = cards.map((card) => {
+      let m = CardKit.matchStudent(card.name, refs);
+      if (m.kind === 'none' && card.sender) m = CardKit.matchStudent(card.sender, refs);
+      const ev = CardKit.evaluateCard(card, template);
+      const surah = card.items.find((i) => i.key === 'surah')?.value || '';
+      const amt = (k) => { const it = card.items.find((i) => i.key === k); return it ? CardKit.readAmount(it.value, it.label, k === 'memo' ? surah : '', SURAH_INFO) : null; };
+      return { card, m, ev, memo: amt('memo'), review: amt('review') };
+    });
+    const counts = {};
+    parsed.forEach((p) => { if (p.m.kind === 'matched') counts[p.m.student.id] = (counts[p.m.student.id] || 0) + 1; });
+    const amountText = (a) => !a ? '' : a.range ? `${a.range.surahStart} ${a.range.ayahStart}${a.range.surahEnd !== a.range.surahStart ? ` إلى ${a.range.surahEnd}` : ''}–${a.range.ayahEnd}` : a.pages != null ? fmtPages(a.pages) : '';
+
+    $('#review').innerHTML = `
+    <section class="sheet" style="margin-top:16px"><h2>البطاقات المقروءة <small>${parsed.length}</small></h2>
+      ${parsed.map((p, i) => {
+        const opts = (p.m.kind === 'ambiguous' ? p.m.candidates : refs);
+        const sel = p.m.kind === 'matched' ? p.m.student.id : '';
+        const dayBad = p.card.day != null && p.card.day !== wd;
+        return `<article class="stu card-review ${p.ev.missing.length ? 'short' : 'marked'}" data-i="${i}">
+          <div class="stu-head" style="flex-wrap:wrap"><b>${esc(p.card.name || p.card.sender || 'بلا اسم')}</b>
+            ${p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}
+            ${dayBad ? `<span class="tag amber">البطاقة ليوم ${DAYS[p.card.day]}</span>` : ''}
+            ${p.m.kind === 'matched' && counts[p.m.student.id] > 1 ? '<span class="tag amber">مكرَّرة، تُعتمد الأخيرة</span>' : ''}</div>
+          <label class="field">الطالبة<select class="input sm pick" aria-label="الطالبة">
+            <option value="">${p.m.kind === 'ambiguous' ? 'أكثر من طالبة بهذا الاسم، اختاري' : p.m.kind === 'none' ? 'لم أجد الاسم في الحلقة، اختاري' : ''}</option>
+            ${opts.map((o) => `<option value="${o.id}"${o.id === sel ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
+          <div class="card-items">${p.ev.rows.map((r) => `<div class="ci ${r.ok ? '' : 'bad'}"><span>${esc(r.label)}</span><b>${r.value ? esc(r.value) : (r.present ? 'فارغ' : 'غير موجود')}</b></div>`).join('')}</div>
+          ${(p.memo && amountText(p.memo)) || (p.review && amountText(p.review)) ? `<p class="hint-line">${p.memo && amountText(p.memo) ? `الحفظ: ${esc(amountText(p.memo))}` : ''}${p.memo && amountText(p.memo) && p.review && amountText(p.review) ? '، ' : ''}${p.review && amountText(p.review) ? `المراجعة: ${esc(amountText(p.review))}` : ''}</p>` : ''}
+        </article>`;
+      }).join('')}
+    </section>
+    <section class="sheet" id="noCard"><h2>لم تُرسل بطاقة <small id="noCardCount"></small></h2><div id="noCardList"></div></section>
+    <div class="save-dock"><button class="btn" id="saveCards">حفظ الإدخال</button></div>`;
+
+    const drawNoCard = () => {
+      const picked = new Set($$('.card-review .pick', v).map((s) => +s.value).filter(Boolean));
+      const rest = enr.filter((x) => !picked.has(x.e.id));
+      $('#noCardCount').textContent = rest.length ? `${rest.length}` : '';
+      const prev = Object.fromEntries($$('#noCardList .stu', v).map((c) => [c.dataset.eid, c.dataset.att]));
+      $('#noCardList').innerHTML = rest.map((x) => {
+        const att = prev[x.e.id] ?? 'absent';
+        return `<article class="stu" data-eid="${x.e.id}" data-att="${att}"><div class="stu-head"><span class="initial">${esc(initial(x.s.full_name))}</span><b>${esc(x.s.full_name)}</b></div>
+        <div class="choices">${[['absent', 'غائبة'], ['excused', 'مستأذنة'], ['', 'بلا تسجيل']].map(([k, l]) => `<button type="button" class="choice${att === k ? ' on' : ''}" data-v="${k || 'none'}" data-k="${k}">${l}</button>`).join('')}</div></article>`;
+      }).join('') || '<div class="empty">وصلت بطاقات كل الطالبات 🌸</div>';
+      $$('#noCardList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); c.dataset.att = b.dataset.k; $$('.choice', c).forEach((x) => x.classList.toggle('on', x === b)); }));
+    };
+    drawNoCard();
+    $$('.card-review .pick', v).forEach((s) => (s.onchange = drawNoCard));
+    $('#review').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    $('#saveCards').onclick = async () => {
+      const rows = new Map(); const unpicked = [];
+      $$('.card-review', v).forEach((el) => {
+        const p = parsed[+el.dataset.i]; const eid = +el.querySelector('.pick').value;
+        if (!eid) { unpicked.push(p.card.name || p.card.sender || 'بطاقة بلا اسم'); return; }
+        const row = { enrollment_id: eid, record_date: ENTRY.date, attendance: 'present', grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
+          memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
+          memo_pages: null, review_pages: null,
+          card: p.ev.rows.map((r) => ({ label: r.label, value: r.value, ok: r.ok })), shortcoming: p.ev.missing.length > 0, shortcoming_items: p.ev.missing };
+        for (const [k, a] of [['memo', p.memo], ['review', p.review]]) {
+          if (!a) continue;
+          if (a.range) {
+            const fs = surahNo(a.range.surahStart); const ts = surahNo(a.range.surahEnd);
+            if (fs && ts) Object.assign(row, { [`${k}_from_surah`]: fs, [`${k}_from_ayah`]: a.range.ayahStart, [`${k}_to_surah`]: ts, [`${k}_to_ayah`]: a.range.ayahEnd, [`${k}_pages`]: Math.round(pagesOfRange(fs, a.range.ayahStart, ts, a.range.ayahEnd) * 100) / 100 });
+          } else if (a.pages != null) row[`${k}_pages`] = Math.round(a.pages * 100) / 100;
+        }
+        rows.set(eid, row);
+      });
+      if (unpicked.length) { toast(`حدِّدي الطالبة لبطاقة: ${unpicked[0]}`, 'bad'); return; }
+      $$('#noCardList .stu', v).forEach((c) => {
+        if (!c.dataset.att) return;
+        rows.set(+c.dataset.eid, { enrollment_id: +c.dataset.eid, record_date: ENTRY.date, attendance: c.dataset.att, grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
+          memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
+          memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null });
+      });
+      const list = [...rows.values()];
+      if (!list.length) { toast('لا يوجد ما يُحفظ', 'bad'); return; }
+      const btn = $('#saveCards'); btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
+      try {
+        await api.upsert('daily_records', list, 'enrollment_id,record_date');
+        // المسارات الأسبوعية: البطاقة تُرسل بعد السرد على الأهل، فتسجِّل السرد تلقائيًّا
+        if (weekly && track.sard_day === wd) {
+          const sardRows = list.filter((r) => r.attendance !== 'excused').map((r) => ({ enrollment_id: r.enrollment_id, sard_date: ENTRY.date, done: r.attendance === 'present', note: 'من بطاقة الأسبوع', recorded_by: S.me.id, updated_at: new Date().toISOString() }));
+          if (sardRows.length) await api.upsert('weekly_sard', sardRows, 'enrollment_id,sard_date');
+        }
+        const short = list.filter((r) => r.shortcoming).length;
+        ENTRY.text = '';
+        toast(`حُفظ إدخال ${list.length} طالبة${short ? `، منهن ${short} مقصِّرة` : ''} 🌸`, 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); btn.disabled = false; btn.textContent = 'حفظ الإدخال'; }
+    };
+  }
+};
+
+/* =========================================================
+   الطالبات
+   ========================================================= */
+const STU = { q: '', circle: '' };
+PAGES.students = async (v) => {
+  const circles = myCircles();
+  v.innerHTML = `<div class="wrap">${cartouche('الطالبات', '<span id="stuCount"></span>')}
+  <div class="toolbar">
+    <input class="input" id="stuQ" type="search" placeholder="ابحثي بالاسم أو الهاتف" value="${esc(STU.q)}" aria-label="بحث">
+    <select class="input" id="stuC" aria-label="الحلقة"><option value="">كل الحلقات</option>${circles.map((c) => `<option value="${c.id}"${+STU.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}${isAdmin() ? `<option value="none"${STU.circle === 'none' ? ' selected' : ''}>بلا حلقة</option>` : ''}</select>
+    ${canEditStudents() ? '<div class="end"><button class="btn" id="addStu">إضافة طالبة</button></div>' : ''}
+  </div>
+  <section class="sheet"><div class="lines" id="stuList"></div></section></div>`;
+  const draw = () => {
+    let list = visibleStudents();
+    if (STU.circle === 'none') list = list.filter((s) => !studentCircles(s.id).length);
+    else if (STU.circle) list = list.filter((s) => studentCircles(s.id).some((c) => c.id === +STU.circle));
+    if (STU.q) list = list.filter((s) => s.full_name.includes(STU.q) || (s.phone || '').includes(STU.q));
+    $('#stuList').innerHTML = list.map((s) => `<a class="line" href="#/student/${s.id}"><span class="initial">${esc(initial(s.full_name))}</span>
+      <div class="grow"><div class="t">${esc(s.full_name)}</div><div class="s">${esc(studentCircles(s.id).map((c) => c.name).join('، ') || 'بلا حلقة')}</div></div>
+      ${s.active ? '' : '<span class="tag gray">غير نشطة</span>'}</a>`).join('') || '<div class="empty">لا نتائج. جرِّبي اسمًا آخر.</div>';
+    $('#stuCount').textContent = `${list.length} طالبة`;
+  };
+  draw();
+  $('#stuQ').oninput = (e) => { STU.q = e.target.value.trim(); draw(); };
+  $('#stuC').onchange = (e) => { STU.circle = e.target.value; draw(); };
+  const add = $('#addStu'); if (add) add.onclick = () => studentForm();
+};
+
+function studentForm(s = null) {
+  const circles = myCircles();
+  modal(`<h2>${s ? 'تعديل بيانات الطالبة' : 'طالبة جديدة'}</h2>
+    <form class="form-grid" id="sf">
+      <label class="field full">الاسم الكامل<input class="input" name="full_name" required value="${esc(s?.full_name)}"></label>
+      <label class="field">هاتف الطالبة<input class="input" name="phone" inputmode="tel" dir="ltr" value="${esc(s?.phone)}"></label>
+      <label class="field">هاتف وليِّ الأمر<input class="input" name="guardian_phone" inputmode="tel" dir="ltr" value="${esc(s?.guardian_phone)}"></label>
+      <label class="field">سنة الميلاد<input class="input" name="birth_year" type="number" min="1940" max="2030" value="${esc(s?.birth_year)}"></label>
+      <label class="field">تاريخ الالتحاق<input class="input" name="joined_at" type="date" value="${esc(s?.joined_at || today())}"></label>
+      ${s ? '' : `<label class="field full">الحلقة<select class="input" name="circle_id"><option value="">بدون حلقة الآن</option>${circles.map((c) => `<option value="${c.id}"${+STU.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>`}
+      <label class="field full">ملاحظات<textarea class="input" name="notes">${esc(s?.notes)}</textarea></label>
+      ${s ? `<label class="check full"><input type="checkbox" name="active"${s.active ? ' checked' : ''}> طالبة نشطة</label>` : ''}
+      <div class="actions full"><button class="btn" type="submit">${s ? 'حفظ التعديل' : 'إضافة الطالبة'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
+    </form>`, (m, close) => {
+    m.querySelector('#sf').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const row = { full_name: fd.get('full_name').trim(), phone: fd.get('phone').trim() || null, guardian_phone: fd.get('guardian_phone').trim() || null, birth_year: +fd.get('birth_year') || null, joined_at: fd.get('joined_at') || today(), notes: fd.get('notes').trim() || null };
+      if (s) row.active = !!fd.get('active');
+      try {
+        if (s) await api.update('students', s.id, row);
+        else {
+          const created = await api.insert('students', { ...row, active: true });
+          const cid = +fd.get('circle_id');
+          if (cid) await api.insert('enrollments', { student_id: created.id, circle_id: cid, active: true, started_at: today() });
+        }
+        await loadAll(); close(); toast(s ? 'حُفظ التعديل 🌸' : 'أُضيفت الطالبة 🌸', 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+  });
+}
+
+PAGES.student = async (v, arg) => {
+  const s = studentById(+arg);
+  if (!s || !visibleStudents().includes(s)) { v.innerHTML = '<div class="wrap"><div class="sheet empty">الطالبة غير موجودة أو خارج نطاق صلاحياتكِ</div></div>'; return; }
+  const enrs = S.enrollments.filter((e) => e.student_id === s.id);
+  const recs = enrs.length ? await api.list('daily_records', { in: { enrollment_id: enrs.map((e) => e.id) } }) : [];
+  recs.sort((a, b) => b.record_date.localeCompare(a.record_date));
+  const cnt = (k) => recs.filter((r) => r.attendance === k).length;
+  const memoTotal = Math.round(recs.reduce((n, r) => n + memoPages(r), 0) * 10) / 10;
+  const lastM = recs.find((r) => r.memo_to_surah);
+  const cov = juzCoverage(recs.map((r) => [r.memo_from_surah, r.memo_from_ayah, r.memo_to_surah, r.memo_to_ayah]));
+  const enrCircle = Object.fromEntries(enrs.map((e) => [e.id, circleById(e.circle_id)]));
+  const editable = canEditStudents();
+
+  const accounts = S.profiles.filter((p) => p.role === 'student' && p.student_id === s.id);
+  const sardEnr = enrs.filter((e) => e.active && trackOfCircle(circleById(e.circle_id))?.sard_day != null);
+  let sardRow = null;
+  if (sardEnr.length) {
+    const sards = await api.list('weekly_sard', { in: { enrollment_id: sardEnr.map((e) => e.id) } });
+    const byKey = Object.fromEntries(sards.map((x) => [`${x.enrollment_id}|${x.sard_date}`, x]));
+    const e = sardEnr[0]; const dates = sardDates(trackOfCircle(circleById(e.circle_id)), 6);
+    sardRow = { e, dates, ...sardStreak(e, dates, byKey) };
+  }
+  v.innerHTML = `<div class="wrap">
+  ${isStu() ? cartouche('تقدُّمي', `أهلًا بكِ يا ${esc(firstName(s.full_name))} 🌸 ${fmtDate(today())}، ${HIJRI()}`) : ''}
+  <section class="sheet">
+    <div class="profile"><span class="initial lg rose">${esc(initial(s.full_name))}</span>
+      <div class="grow"><h2>${esc(s.full_name)}</h2>
+        <div class="choices">${studentCircles(s.id).map((c) => `<span class="tag rose">${esc(c.name)}</span>`).join('') || '<span class="tag gray">بلا حلقة</span>'}${s.active ? '' : '<span class="tag gray">غير نشطة</span>'}</div></div>
+      ${editable ? '<button class="btn sm ghost" id="editStu">تعديل البيانات</button>' : ''}</div>
+    <dl class="facts">
+      <div><dt>هاتف الطالبة</dt><dd dir="ltr" style="text-align:right">${esc(s.phone || '—')}</dd></div>
+      <div><dt>هاتف وليِّ الأمر</dt><dd dir="ltr" style="text-align:right">${esc(s.guardian_phone || '—')}</dd></div>
+      <div><dt>الالتحاق</dt><dd>${s.joined_at ? fmtDate(s.joined_at, { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</dd></div>
+      <div><dt>آخر موضع حفظ</dt><dd>${lastM ? esc(posText(lastM.memo_to_surah, lastM.memo_to_ayah)) : '—'}</dd></div>
+      ${sardRow ? `<div><dt>السرد الأسبوعي (آخر ٤)</dt><dd>${trailHtml(sardRow)} ${sardRow.streak >= SARD_LIMIT ? '<span class="tag red">وصلت حدَّ الحذف</span>' : sardRow.streak ? '<span class="tag amber">فاتها أسبوع</span>' : ''}</dd></div>` : ''}
+      ${!isStu() ? `<div><dt>حساب الطالبة</dt><dd dir="ltr" style="text-align:right">${accounts.length ? accounts.map((a) => '@' + esc(a.username)).join('، ') : '—'}</dd></div>` : ''}
+      ${studentCircles(s.id).some((c) => instructorName(c)) ? `<div><dt>المعلِّمة</dt><dd>${esc(studentCircles(s.id).map((c) => instructorName(c)).filter(Boolean).join('، '))}</dd></div>` : ''}
+    </dl>
+    ${s.notes ? `<p style="margin-top:12px;color:var(--ink-2)">${esc(s.notes)}</p>` : ''}
+  </section>
+  <div class="strip" style="margin-top:16px">
+    <div><div class="n olive num">${pct(cnt('present') + cnt('late'), recs.length)}%</div><div class="l">نسبة الحضور</div></div>
+    <div><div class="n red num">${cnt('absent')}</div><div class="l">مرات الغياب</div></div>
+    <div><div class="n rose num">${memoTotal}</div><div class="l">وجهًا محفوظًا</div></div>
+    <div><div class="n num" style="color:var(--amber)">${recs.filter((r) => r.shortcoming).length}</div><div class="l">مرات التقصير</div></div>
+  </div>
+  <section class="sheet"><h2>خريطة الأجزاء <small>ما سُجِّل من حفظ في الموقع</small></h2>
+    <div class="juzmap">${cov.map((c, i) => `<div class="juz ${c >= 0.999 ? 'full' : c > 0 ? 'some' : ''}" title="الجزء ${i + 1}: ${Math.round(c * 100)}%"><i style="height:${Math.round(c * 100)}%"></i><span>${i + 1}</span></div>`).join('')}</div>
+    <div class="legend"><span><i style="background:#f3e7ec;border:1px solid var(--rule)"></i>لم يُسجَّل</span><span><i style="background:var(--rose)"></i>جزئي</span><span><i style="background:var(--olive)"></i>جزء كامل</span></div>
+  </section>
+  <section class="sheet"><h2>الحلقات</h2><div class="lines">
+    ${enrs.map((e) => `<div class="line"><div class="grow"><div class="t">${esc(circleById(e.circle_id)?.name)}</div><div class="s">${e.active ? 'منذ' : 'انتهت في'} ${fmtShort(e.active ? e.started_at : (e.ended_at || e.started_at))}</div></div>
+      ${e.active ? (editable ? `<button class="btn sm ghost" data-move="${e.id}">نقل</button><button class="btn sm danger" data-end="${e.id}">إنهاء</button>` : '<span class="tag olive">حالية</span>') : '<span class="tag gray">سابقة</span>'}</div>`).join('') || '<div class="empty">لم تلتحق بحلقة بعد</div>'}
+  </div>${editable ? '<button class="btn sm quiet" id="enrollBtn" style="margin-top:12px">إضافة إلى حلقة</button>' : ''}</section>
+  <section class="sheet"><h2>السجل <small>آخر ٤٠ يومًا مسجَّلًا</small></h2><div class="lines timeline">
+    ${recs.slice(0, 40).map((r) => `<div class="line"><div class="when">${fmtShort(r.record_date)}</div><div class="grow">
+      <div class="choices">${attTag(r.attendance)}${r.shortcoming ? '<span class="tag amber">تقصير</span>' : ''}${r.grade ? `<span class="tag ${r.grade === 'repeat' ? 'red' : 'rose'}">${GRADE[r.grade]}</span>` : ''}${enrs.length > 1 ? `<span class="tag gray">${esc(enrCircle[r.enrollment_id]?.name)}</span>` : ''}</div>
+      ${r.memo_to_surah ? `<div class="s">حفظ: ${esc(rangeText(r.memo_from_surah, r.memo_from_ayah, r.memo_to_surah, r.memo_to_ayah))}</div>` : ''}
+      ${r.review_to_surah ? `<div class="s">مراجعة: ${esc(rangeText(r.review_from_surah, r.review_from_ayah, r.review_to_surah, r.review_to_ayah))}</div>` : ''}
+      ${!r.memo_to_surah && r.memo_pages ? `<div class="s">حفظ: ${fmtPages(+r.memo_pages)}</div>` : ''}
+      ${!r.review_to_surah && r.review_pages ? `<div class="s">مراجعة: ${fmtPages(+r.review_pages)}</div>` : ''}
+      ${r.shortcoming && r.shortcoming_items?.length ? `<div class="s" style="color:var(--amber)">أخلَّت بـ: ${esc(r.shortcoming_items.join('، '))}</div>` : ''}
+      ${r.note ? `<div class="s">ملاحظة: ${esc(r.note)}</div>` : ''}</div></div>`).join('') || '<div class="empty">لا سجل بعد</div>'}
+  </div></section></div>`;
+
+  const ed = $('#editStu'); if (ed) ed.onclick = () => studentForm(s);
+  const activeIds = enrs.filter((e) => e.active).map((e) => e.circle_id);
+  const pickCircle = (title, onPick) => {
+    const options = myCircles().filter((c) => !activeIds.includes(c.id));
+    if (!options.length) { toast('لا توجد حلقة أخرى متاحة', 'bad'); return; }
+    modal(`<h2>${title}</h2><label class="field">الحلقة<select class="input" id="pc">${options.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+      <div class="actions"><button class="btn" id="pcOk">${title}</button><button class="btn ghost" data-close>إلغاء</button></div>`,
+    (m, close) => { m.querySelector('#pcOk').onclick = async () => { try { await onPick(+m.querySelector('#pc').value); await loadAll(); close(); toast('تم 🌸', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); } }; });
+  };
+  const en = $('#enrollBtn'); if (en) en.onclick = () => pickCircle('إضافة إلى حلقة', (cid) => api.insert('enrollments', { student_id: s.id, circle_id: cid, active: true, started_at: today() }));
+  $$('[data-move]', v).forEach((b) => (b.onclick = () => pickCircle('نقل إلى حلقة', async (cid) => {
+    await api.update('enrollments', +b.dataset.move, { active: false, ended_at: today() });
+    await api.insert('enrollments', { student_id: s.id, circle_id: cid, active: true, started_at: today() });
+  })));
+  $$('[data-end]', v).forEach((b) => (b.onclick = async () => {
+    if (!(await confirmBox('إنهاء التحاق الطالبة بهذه الحلقة؟ يبقى سجلُّها محفوظًا.', 'إنهاء الالتحاق'))) return;
+    try { await api.update('enrollments', +b.dataset.end, { active: false, ended_at: today() }); await loadAll(); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+  }));
+};
+
+/* =========================================================
+   التقارير
+   ========================================================= */
+const REP = { from: null, to: null, track: '', circle: '', tab: 'students' };
+PAGES.reports = async (v) => {
+  REP.from = REP.from || monthStart(); REP.to = REP.to || today();
+  let circles = myCircles(true);
+  const tracksAvail = S.tracks.filter((t) => circles.some((c) => c.track_id === t.id));
+  if (REP.track) circles = circles.filter((c) => c.track_id === +REP.track);
+  if (REP.circle) circles = circles.filter((c) => c.id === +REP.circle);
+  const cids = circles.map((c) => c.id);
+  const enrAll = S.enrollments.filter((e) => cids.includes(e.circle_id));
+  const enrById = Object.fromEntries(enrAll.map((e) => [e.id, e]));
+  const recs = (await getRecords(REP.from, REP.to)).filter((r) => enrById[r.enrollment_id]);
+  const memoOf = (r) => memoPages(r);
+  const r1 = (x) => Math.round(x * 10) / 10;
+
+  const per = {};
+  recs.forEach((r) => {
+    const p = per[r.enrollment_id] ||= { present: 0, late: 0, absent: 0, excused: 0, memo: 0, review: 0, repeat: 0, last: null, lastDate: '' };
+    p[r.attendance]++; p.memo += memoOf(r);
+    p.review += reviewPages(r);
+    if (r.shortcoming) p.repeat++;
+    if (r.memo_to_surah && r.record_date >= p.lastDate) { p.last = [r.memo_to_surah, r.memo_to_ayah]; p.lastDate = r.record_date; }
+  });
+  const stuRows = Object.entries(per).map(([eid, p]) => {
+    const e = enrById[eid]; const total = p.present + p.late + p.absent + p.excused;
+    return [studentById(e.student_id)?.full_name || '—', circleById(e.circle_id)?.name, p.present, p.late, p.absent, p.excused, pct(p.present + p.late, total) + '%', r1(p.memo), r1(p.review), p.repeat, p.last ? posText(...p.last) : '—'];
+  }).sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'ar') || String(a[0]).localeCompare(String(b[0]), 'ar'));
+  const cirRows = circles.map((c) => {
+    const cr = recs.filter((r) => enrById[r.enrollment_id].circle_id === c.id);
+    return [c.name, trackName(c.track_id), profileName(c.teacher_id), instructorName(c) || '—', activeEnrollments([c.id]).length, new Set(cr.map((r) => r.record_date)).size,
+      pct(cr.filter((r) => r.attendance === 'present' || r.attendance === 'late').length, cr.length) + '%', cr.filter((r) => r.attendance === 'absent').length, cr.filter((r) => r.shortcoming).length, r1(cr.reduce((n, r) => n + memoOf(r), 0))];
+  });
+  const teacherIds = [...new Set(circles.map((c) => c.teacher_id).filter(Boolean))];
+  const sa = teacherIds.length ? await api.list('staff_attendance', { gte: { record_date: REP.from }, lte: { record_date: REP.to }, in: { profile_id: teacherIds } }) : [];
+  const staffRows = teacherIds.map((pid) => {
+    const mine = sa.filter((x) => x.profile_id === pid); const c = (k) => mine.filter((x) => x.status === k).length;
+    return [profileName(pid), circles.filter((x) => x.teacher_id === pid).map((x) => x.name).join('، '), c('present'), c('late'), c('absent'), c('excused')];
+  }).sort((a, b) => b[4] - a[4]);
+
+  const TABS = {
+    students: ['الطالبات', ['الطالبة', 'الحلقة', 'حضور', 'تأخر', 'غياب', 'استئذان', 'نسبة الحضور', 'أوجه الحفظ', 'أوجه المراجعة', 'مرات التقصير', 'آخر موضع'], stuRows, 2],
+    circles: ['الحلقات', ['الحلقة', 'المسار', 'مشرفة الحلقة', 'المعلِّمة', 'الطالبات', 'أيام الإدخال', 'نسبة الحضور', 'مرات الغياب', 'مرات التقصير', 'أوجه الحفظ'], cirRows, 4],
+    staff: ['المشرفات', ['مشرفة الحلقة', 'الحلقات', 'حضور', 'تأخر', 'غياب', 'اعتذار'], staffRows, 2],
+  };
+  const [label, head, rows, numFrom] = TABS[REP.tab];
+  const longDate = (d) => fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' });
+
+  v.innerHTML = `<div class="wrap">
+  <div class="print-only"><img src="${LOGO}" alt=""><h2>تقرير ${label}</h2><p>من ${longDate(REP.from)} إلى ${longDate(REP.to)}</p></div>
+  <div class="no-print">${cartouche('التقارير', `${recs.length} سجلًّا من ${longDate(REP.from)} إلى ${longDate(REP.to)}`)}</div>
+  <div class="toolbar">
+    <label class="field">من<input class="input" type="date" id="rFrom" value="${REP.from}"></label>
+    <label class="field">إلى<input class="input" type="date" id="rTo" value="${REP.to}"></label>
+    ${tracksAvail.length > 1 ? `<label class="field">المسار<select class="input" id="rTrack"><option value="">كل المسارات</option>${tracksAvail.map((t) => `<option value="${t.id}"${+REP.track === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>` : ''}
+    <label class="field">الحلقة<select class="input" id="rCircle"><option value="">كل الحلقات</option>${myCircles(true).filter((c) => !REP.track || c.track_id === +REP.track).map((c) => `<option value="${c.id}"${+REP.circle === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+    <div class="end"><button class="btn sm quiet" id="csv">تنزيل Excel</button><button class="btn sm ghost" id="prt">طباعة</button></div>
+  </div>
+  <div class="tabs" role="tablist">${Object.entries(TABS).map(([k, [l]]) => `<button class="tab${REP.tab === k ? ' on' : ''}" role="tab" aria-selected="${REP.tab === k}" data-tab="${k}">${l}</button>`).join('')}</div>
+  ${rows.length ? `<div class="table-wrap"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i >= numFrom ? 'num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+    : '<div class="sheet empty">لا بيانات في هذه الفترة. وسِّعي نطاق التاريخ أو اختاري حلقة أخرى.</div>'}</div>`;
+
+  const set = (k) => (e) => { REP[k] = e.target.value; if (k === 'track') REP.circle = ''; route(); };
+  $('#rFrom').onchange = set('from'); $('#rTo').onchange = set('to');
+  const rt = $('#rTrack'); if (rt) rt.onchange = set('track');
+  $('#rCircle').onchange = set('circle');
+  $$('[data-tab]', v).forEach((b) => (b.onclick = () => { REP.tab = b.dataset.tab; route(); }));
+  $('#csv').onclick = () => downloadCSV(`تقرير-${label}-${REP.from}-${REP.to}`, head, rows);
+  $('#prt').onclick = () => window.print();
+};
+
+/* =========================================================
+   المعلِّمات
+   ========================================================= */
+const STF = { date: null };
+PAGES.staff = async (v) => {
+  STF.date = STF.date || today();
+  const pending = S.profiles.filter((p) => p.role === 'pending');
+  const staff = S.profiles.filter((p) => p.role !== 'pending' && p.role !== 'student').sort(byName);
+  const stuAccounts = S.profiles.filter((p) => p.role === 'student').sort(byName);
+  const teachers = isAdmin()
+    ? S.profiles.filter((p) => p.role === 'teacher' || (!['pending', 'disabled'].includes(p.role) && S.circles.some((c) => c.teacher_id === p.id))).sort(byName)
+    : [...new Set(myCircles().map((c) => c.teacher_id).filter(Boolean))].map((id) => S.profiles.find((p) => p.id === id)).filter(Boolean).sort(byName);
+  const att = teachers.length ? await api.list('staff_attendance', { eq: { record_date: STF.date }, in: { profile_id: teachers.map((t) => t.id) } }) : [];
+  const by = Object.fromEntries(att.map((a) => [a.profile_id, a]));
+  const circlesOf = (id) => S.circles.filter((c) => c.teacher_id === id).map((c) => c.name).join('، ');
+
+  v.innerHTML = `<div class="wrap">${cartouche('الكادر', 'الحسابات وحضور مشرفات الحلقات')}
+  ${isAdmin() && pending.length ? `<section class="sheet"><h2>بانتظار التفعيل <small>${pending.length}</small></h2><div class="lines">
+    ${pending.map((p) => `<div class="line"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s"><span dir="ltr">@${esc(p.username)}</span>${p.requested_role ? `، ${ROLE[p.requested_role] || ''}` : ''}</div></div><button class="btn sm" data-edit="${esc(p.id)}">تفعيل</button></div>`).join('')}
+  </div></section>` : ''}
+  <section class="sheet"><h2>حضور مشرفات الحلقات</h2>
+    <label class="field" style="max-width:220px;margin-bottom:12px">اليوم<input class="input" type="date" id="sDate" value="${STF.date}" max="${today()}"></label>
+    <div id="sAtt">${teachers.map((t) => `<article class="stu" data-pid="${esc(t.id)}" data-att="${by[t.id]?.status || ''}">
+      <div class="stu-head"><span class="initial">${esc(initial(t.full_name))}</span><b>${esc(t.full_name)}</b><span class="last">${esc(circlesOf(t.id) || 'بلا حلقة')}</span></div>
+      <div class="choices">${Object.entries(STAFF_ATT).map(([k, l]) => `<button type="button" class="choice${by[t.id]?.status === k ? ' on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
+      <input class="input sm note" placeholder="ملاحظة (اختياري)" value="${esc(by[t.id]?.note || '')}" style="margin-top:10px" aria-label="ملاحظة"></article>`).join('') || '<div class="empty">لا مشرفات في نطاقكِ</div>'}</div>
+    ${teachers.length ? '<button class="btn block" id="saveStaff" style="margin-top:14px">حفظ الحضور</button>' : ''}
+  </section>
+  ${isAdmin() ? `<section class="sheet"><h2>الكادر <small>${staff.length}</small></h2><div class="lines">
+    ${staff.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
+      <div class="s">${p.role === 'supervisor' ? esc(trackName(p.track_id)) : p.role === 'instructor' ? esc(S.circles.filter((c) => c.instructor_id === p.id).map((c) => c.name).join('، ') || '—') : esc(circlesOf(p.id) || '—')}</div></div>
+      <span class="tag ${p.role === 'admin' ? 'rose' : p.role === 'supervisor' ? 'olive' : p.role === 'disabled' ? 'gray' : p.role === 'instructor' ? 'blue' : 'amber'}">${ROLE[p.role]}</span></button>`).join('')}
+  </div></section>
+  <section class="sheet"><details><summary class="sec-title" style="cursor:pointer;margin:0">حسابات الطالبات <small>${stuAccounts.length}</small></summary><div class="lines" style="margin-top:10px">
+    ${stuAccounts.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial rose">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
+      <div class="s"><span dir="ltr">@${esc(p.username)}</span>، ${esc(studentById(p.student_id)?.full_name || 'غير مرتبط بسجل')}</div></div></button>`).join('') || '<div class="empty">لا حسابات طالبات بعد</div>'}
+  </div></details></section>` : ''}</div>`;
+
+  $('#sDate').onchange = (e) => { if (e.target.value) { STF.date = e.target.value; route(); } };
+  $$('#sAtt .choice', v).forEach((b) => (b.onclick = () => {
+    const card = b.closest('.stu'); const on = card.dataset.att === b.dataset.v;
+    card.dataset.att = on ? '' : b.dataset.v;
+    $$('.choice', card).forEach((x) => x.classList.toggle('on', !on && x === b));
+  }));
+  const sv = $('#saveStaff');
+  if (sv) sv.onclick = async () => {
+    const rows = $$('#sAtt .stu', v).filter((c) => c.dataset.att).map((c) => ({ profile_id: c.dataset.pid, record_date: STF.date, status: c.dataset.att, note: c.querySelector('.note').value.trim() || null, recorded_by: S.me.id, updated_at: new Date().toISOString() }));
+    if (!rows.length) { toast('حدِّدي حالة مشرفة واحدة على الأقل', 'bad'); return; }
+    sv.disabled = true;
+    try { await api.upsert('staff_attendance', rows, 'profile_id,record_date'); toast('حُفظ الحضور 🌿', 'ok'); route(); }
+    catch (err) { toast(translateError(err.message), 'bad'); sv.disabled = false; }
+  };
+  $$('[data-edit]', v).forEach((b) => (b.onclick = () => profileForm(S.profiles.find((p) => p.id === b.dataset.edit))));
+};
+
+function profileForm(p) {
+  const self = p.id === S.me.id;
+  const initialRole = p.role === 'pending' ? (p.requested_role && ROLE[p.requested_role] ? p.requested_role : 'teacher') : p.role;
+  const linked = new Set(S.profiles.filter((x) => x.role === 'student' && x.student_id && x.id !== p.id).map((x) => x.student_id));
+  const stuOpts = S.students.filter((st) => st.active && !linked.has(st.id)).sort(byName);
+  modal(`<h2>${p.role === 'pending' ? 'تفعيل الحساب' : 'بيانات الحساب'}</h2>
+    <form class="form-grid" id="pf">
+      <label class="field full">الاسم<input class="input" name="full_name" required value="${esc(p.full_name)}"></label>
+      ${p.role === 'pending' && p.requested_role ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role] || p.requested_role}</b></p>` : ''}
+      <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['student', 'instructor', 'teacher', 'supervisor', 'admin', 'disabled'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
+      <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="field full" id="studentField">سجلُّ الطالبة<input class="input" name="student_pick" list="stuList2" placeholder="اكتبي اسم الطالبة واختاريه" value="${esc(p.student_id ? (studentById(p.student_id)?.full_name || '') : '')}">
+        <datalist id="stuList2">${stuOpts.concat(p.student_id && studentById(p.student_id) ? [studentById(p.student_id)] : []).map((st) => `<option value="${esc(st.full_name)}">${esc(studentCircles(st.id).map((c) => c.name).join('، '))}</option>`).join('')}</datalist></label>
+      <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
+      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
+    </form>`, (m, close) => {
+    const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const sf = m.querySelector('#studentField'); const hint = m.querySelector('#roleHint');
+    const HINTS = { teacher: 'تُسنَد حلقتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب.', instructor: 'تُسنَد حلقتها من «المسارات والحلقات»، وترى طالبات حلقتها وتقدُّمهن دون تعديل.', student: 'ترى تقدُّمها هي فقط.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
+    const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); sf.classList.toggle('hidden', rs.value !== 'student'); hint.textContent = HINTS[rs.value] || ''; };
+    rs.onchange = sync; sync();
+    m.querySelector('#pf').onsubmit = async (e) => {
+      e.preventDefault(); const fd = new FormData(e.target);
+      const patch = { full_name: fd.get('full_name').trim() };
+      if (!self) {
+        patch.role = fd.get('role');
+        patch.track_id = patch.role === 'supervisor' ? (+fd.get('track_id') || null) : null;
+        patch.student_id = null;
+        if (patch.role === 'student') {
+          const nm = fd.get('student_pick').trim();
+          const st = S.students.find((x) => x.full_name === nm);
+          if (!st) { toast('اختاري سجلَّ الطالبة من القائمة (أضيفيها من «الطالبات» إن لم تكن موجودة)', 'bad'); return; }
+          if (linked.has(st.id)) { toast('هذا السجلُّ مرتبط بحساب آخر', 'bad'); return; }
+          patch.student_id = st.id;
+        }
+      }
+      if (patch.role === 'supervisor' && !patch.track_id) { toast('اختاري مسار مسؤولة المسار', 'bad'); return; }
+      try { await api.update('profiles', p.id, patch); await loadAll(); close(); toast(p.role === 'pending' ? 'فُعِّل الحساب 🌸' : 'حُفظ 🌸', 'ok'); route(); }
+      catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+  });
+}
+
+/* =========================================================
+   المسارات والحلقات
+   ========================================================= */
+PAGES.settings = async (v) => {
+  const supOpts = S.profiles.filter((p) => ['teacher', 'supervisor', 'admin'].includes(p.role)).sort(byName);
+  const leadOf = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && p.track_id === tid).map((p) => p.full_name).join('، ');
+  v.innerHTML = `<div class="wrap">${cartouche('المسارات والحلقات', `المسارات: ${S.tracks.length}، الحلقات: ${S.circles.length}`)}
+  <div class="toolbar"><div class="end"><button class="btn ghost" id="addTrack">مسار جديد</button><button class="btn" id="addCircle">حلقة جديدة</button></div></div>
+  ${S.tracks.map((t) => {
+    const cs = S.circles.filter((c) => c.track_id === t.id).sort(byName);
+    return `<section class="sheet"><h2>مسار ${esc(t.name)} <button class="btn sm ghost" data-track="${t.id}">تعديل المسار</button></h2>
+      <div class="choices" style="margin:-4px 0 10px">${t.description ? `<span class="tag gray">${esc(t.description)}</span>` : ''}${t.category ? `<span class="tag rose">${esc(t.category)}</span>` : ''}<span class="tag olive">${CTYPE[t.circle_type] || ''}</span><span class="tag blue">${daysText(t.days)}</span>${t.entry_mode === 'weekly' ? '<span class="tag rose">بطاقة أسبوعية</span>' : ''}<span class="tag ${t.sard_day == null ? 'gray' : 'amber'}">${t.sard_day == null ? 'بلا سرد' : `السرد: ${DAYS[t.sard_day]}`}</span></div>
+      ${(t.card_items || []).length ? `<p class="s" style="color:var(--ink-3);font-size:.84rem;margin-bottom:4px">بنود البطاقة: ${esc(t.card_items.join('، '))}</p>` : ''}
+      <p class="s" style="color:var(--ink-3);font-size:.86rem;margin-bottom:6px">مسؤولة المسار: ${esc(leadOf(t.id) || 'لم تُحدَّد بعد')}</p>
+      <div class="lines">${cs.map((c) => `<button class="line" data-circle="${c.id}"><div class="grow"><div class="t">${esc(c.name)}</div>
+        <div class="s">مشرفة الحلقة: ${esc(c.teacher_id ? profileName(c.teacher_id) : 'لم تُحدَّد')}${instructorName(c) ? `، المعلِّمة: ${esc(instructorName(c))}` : ''}</div></div>
+        <span class="tag ${c.active ? 'olive' : 'gray'}">${c.active ? activeEnrollments([c.id]).length + ' طالبة' : 'متوقفة'}</span></button>`).join('') || '<div class="empty">لا حلقات في هذا المسار بعد</div>'}</div></section>`;
+  }).join('') || '<div class="sheet empty">ابدئي بإضافة مسار، ثم حلقاته 🌿</div>'}</div>`;
+
+  const trackForm = (t = null) => modal(`<h2>${t ? 'تعديل المسار' : 'مسار جديد'}</h2><form class="form-grid" id="tf">
+      <label class="field">اسم المسار<input class="input" name="name" required placeholder="مثال: رِكاز" value="${esc(t?.name)}"></label>
+      <label class="field">الفئة<input class="input" name="category" list="cats" placeholder="جامعيات" value="${esc(t?.category)}"><datalist id="cats"><option value="ناشئة"><option value="أطفال"><option value="جامعيات"><option value="خاتمات"></datalist></label>
+      <label class="field full">وصف مختصر<input class="input" name="description" placeholder="مثال: حفظ حُر، رواية حفص" value="${esc(t?.description)}"></label>
+      <label class="field">نوع الحلقة<select class="input" name="circle_type">${Object.entries(CTYPE).map(([k, l]) => `<option value="${k}"${(t?.circle_type || 'memo_review') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field">الترتيب<input class="input" name="sort_order" type="number" value="${t?.sort_order ?? S.tracks.length + 1}"></label>
+      <label class="field">بطاقة الحضور<select class="input" name="entry_mode"><option value="daily"${(t?.entry_mode || 'daily') === 'daily' ? ' selected' : ''}>يومية في أيام المسار</option><option value="weekly"${t?.entry_mode === 'weekly' ? ' selected' : ''}>أسبوعية يوم السرد</option></select></label>
+      <label class="field">يوم السرد الأسبوعي<select class="input" name="sard_day"><option value="">غير مطالَب بالسرد</option>${WEEK_ORDER.map((d) => `<option value="${d}"${t?.sard_day === d || (!t && d === 4) ? ' selected' : ''}>${DAYS[d]}</option>`).join('')}</select></label>
+      <fieldset class="field full" style="border:0;padding:0;margin:0"><legend style="margin-bottom:6px">الأيام</legend><div class="choices">
+        ${WEEK_ORDER.map((d) => `<label class="choice"><input type="checkbox" name="days" value="${d}" ${(t?.days || [0, 1, 2, 3]).includes(d) ? 'checked' : ''} style="accent-color:var(--rose-deep)"> ${DAYS[d]}</label>`).join('')}</div></fieldset>
+      <label class="field full">بنود بطاقة الحضور (بندٌ في كل سطر، وأي بند ناقص يُحسب تقصيرًا)<textarea class="input" name="card_items" rows="5" placeholder="عدد أوجه الحفظ&#10;عدد أوجه المراجعة&#10;سماع القارئ">${esc((t?.card_items || []).join('\n'))}</textarea></label>
+      ${t ? '' : '<label class="check full"><input type="checkbox" name="mk" checked> أنشئي ١٠ حلقات لهذا المسار تلقائيًّا</label>'}
+      <div class="actions full"><button class="btn" type="submit">${t ? 'حفظ' : 'إضافة المسار'}</button>${t ? '<button class="btn danger" type="button" id="delT">حذف المسار</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div></form>`,
+  (m, close) => {
+    m.querySelector('#tf').onsubmit = async (e) => {
+      e.preventDefault(); const fd = new FormData(e.target);
+      const row = { name: fd.get('name').trim(), category: fd.get('category').trim() || null, description: fd.get('description').trim() || null, circle_type: fd.get('circle_type'), days: fd.getAll('days').map(Number).sort(), sort_order: +fd.get('sort_order') || 0, card_items: fd.get('card_items').split('\n').map((x) => x.trim()).filter(Boolean), sard_day: fd.get('sard_day') === '' ? null : +fd.get('sard_day'), entry_mode: fd.get('entry_mode') };
+      if (row.entry_mode === 'weekly' && row.sard_day == null) { toast('البطاقة الأسبوعية تحتاج يوم سرد للمسار', 'bad'); return; }
+      if (!row.days.length) { toast('اختاري يومًا واحدًا على الأقل', 'bad'); return; }
+      try {
+        if (t) await api.update('tracks', t.id, row);
+        else {
+          const created = await api.insert('tracks', row);
+          if (fd.get('mk')) for (let i = 1; i <= 10; i++) await api.insert('circles', { name: `${row.name} ${i}`, track_id: created.id, active: true });
+        }
+        await loadAll(); close(); toast(t ? 'حُفظ المسار 🌸' : 'أُضيف المسار وحلقاته 🌸', 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+    const d = m.querySelector('#delT'); if (d) d.onclick = async () => {
+      if (S.circles.some((c) => c.track_id === t.id)) { toast('احذفي حلقات المسار أو انقليها أولًا', 'bad'); return; }
+      try { await api.remove('tracks', t.id); await loadAll(); close(); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+  });
+
+  const circleForm = (c = null) => {
+    if (!S.tracks.length) { toast('أضيفي مسارًا أولًا', 'bad'); return; }
+    modal(`<h2>${c ? 'تعديل الحلقة' : 'حلقة جديدة'}</h2><form class="form-grid" id="cf">
+      <label class="field">اسم الحلقة<input class="input" name="name" required value="${esc(c?.name)}"></label>
+      <label class="field">المسار<select class="input" name="track_id">${S.tracks.map((t) => `<option value="${t.id}"${c?.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="field">مشرفة الحلقة (تُدخل البيانات)<select class="input" name="teacher_id"><option value="">لم تُحدَّد</option>${supOpts.map((p) => `<option value="${esc(p.id)}"${c?.teacher_id === p.id ? ' selected' : ''}>${esc(p.full_name)}</option>`).join('')}</select></label>
+      <label class="field">معلِّمة الحلقة (حساب)<select class="input" name="instructor_id"><option value="">بلا حساب</option>${S.profiles.filter((p) => p.role === 'instructor').sort(byName).map((p) => `<option value="${esc(p.id)}"${c?.instructor_id === p.id ? ' selected' : ''}>${esc(p.full_name)}</option>`).join('')}</select></label>
+      <label class="field">اسم المعلِّمة (إن لم يكن لها حساب)<input class="input" name="teacher_name" value="${esc(c?.teacher_name)}"></label>
+      <label class="field full">الوقت<input class="input" name="schedule" placeholder="مثال: بعد العصر" value="${esc(c?.schedule)}"></label>
+      ${c ? `<label class="check full"><input type="checkbox" name="active"${c.active ? ' checked' : ''}> الحلقة قائمة</label>` : ''}
+      <div class="actions full"><button class="btn" type="submit">حفظ</button>${c ? '<button class="btn danger" type="button" id="delC">حذف الحلقة</button>' : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div></form>`,
+    (m, close) => {
+      m.querySelector('#cf').onsubmit = async (e) => {
+        e.preventDefault(); const fd = new FormData(e.target);
+        const row = { name: fd.get('name').trim(), track_id: +fd.get('track_id'), teacher_id: fd.get('teacher_id') || null, teacher_name: fd.get('teacher_name').trim() || null, instructor_id: fd.get('instructor_id') || null, schedule: fd.get('schedule').trim() || null, active: c ? !!fd.get('active') : true };
+        try { c ? await api.update('circles', c.id, row) : await api.insert('circles', row); await loadAll(); close(); toast('حُفظت الحلقة 🌸', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+      };
+      const del = m.querySelector('#delC'); if (del) del.onclick = async () => {
+        const n = activeEnrollments([c.id]).length;
+        close();
+        if (!(await confirmBox(n ? `حذف «${c.name}»؟ فيها ${n} طالبة، وسيُحذف التحاقهن بها وسجلُّ الحلقة نهائيًّا.` : `حذف «${c.name}» نهائيًّا؟`, 'حذف الحلقة'))) return;
+        try { await api.remove('circles', c.id); await loadAll(); toast('حُذفت الحلقة', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+      };
+    });
+  };
+  $('#addTrack').onclick = () => trackForm();
+  $('#addCircle').onclick = () => circleForm();
+  $$('[data-track]', v).forEach((b) => (b.onclick = () => trackForm(S.tracks.find((t) => t.id === +b.dataset.track))));
+  $$('[data-circle]', v).forEach((b) => (b.onclick = () => circleForm(circleById(+b.dataset.circle))));
+};
+
+/* =========================================================
+   المهام اليومية لمسؤولات المسارات
+   لكل حلقة: عدد الحاضرات والغائبات والمعتذرات، وتُغلق ٥ صباحًا بتوقيت مكة
+   ========================================================= */
+const TASK = { date: null, open: null };
+const tracksOn = (date) => S.tracks.filter((t) => isEntryDay(t, date));
+
+PAGES.tasks = async (v) => {
+  const current = taskDay();
+  TASK.date = TASK.date || current;
+  const date = TASK.date;
+  const myTracks = (isAdmin() ? tracksOn(date) : tracksOn(date).filter((t) => t.id === S.me.track_id));
+  const circles = S.circles.filter((c) => c.active && myTracks.some((t) => t.id === c.track_id));
+  const cids = circles.map((c) => c.id);
+  const tasks = cids.length ? await api.list('daily_tasks', { eq: { task_date: date }, in: { circle_id: cids } }) : [];
+  const byCircle = Object.fromEntries(tasks.map((x) => [x.circle_id, x]));
+  const open = taskOpen(date);
+  const left = timeLeft(date);
+  const dateLine = `${fmtDate(date)}${date === current ? '' : ' (يوم سابق)'}`;
+  const deadlineLine = open ? `تُغلق المهام بعد ${left}، الساعة ٥ صباحًا بتوقيت مكة` : (date > current ? 'لم يبدأ هذا اليوم بعد' : 'انتهى وقت هذه المهام');
+
+  // ---------- مسؤولة المسار ----------
+  if (isSup()) {
+    const t = S.tracks.find((x) => x.id === S.me.track_id);
+    if (!t) { v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية')}<div class="sheet empty">لم يُحدَّد مسارُكِ بعد. تواصلي مع القائدة.</div></div>`; return; }
+    const enrIds = activeEnrollments(cids).map((e) => e.id);
+    const recs = enrIds.length ? await getRecords(date, date, enrIds) : [];
+    const enrCircle = Object.fromEntries(activeEnrollments(cids).map((e) => [e.id, e.circle_id]));
+    const fromEntry = (cid, kinds) => recs.filter((r) => enrCircle[r.enrollment_id] === cid && kinds.includes(r.attendance)).length;
+    const done = circles.filter((c) => byCircle[c.id]).length;
+    const editable = open || isAdmin();
+    v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية', `مسار ${esc(t.name)}، ${dateLine}`)}
+    <div class="strip" style="grid-template-columns:repeat(2,1fr)">
+      <div><div class="n ${done === circles.length && circles.length ? 'olive' : 'rose'} num">${done} / ${circles.length}</div><div class="l">حلقة أُتمَّت مهمتها</div></div>
+      <div><div class="n num" style="font-size:1.15rem;padding-top:8px">${open ? left : '—'}</div><div class="l">${deadlineLine}</div></div>
+    </div>
+    <div class="toolbar"><label class="field">اليوم<input class="input" type="date" id="tDate" value="${date}" max="${current}"></label></div>
+    ${!circles.length ? `<div class="sheet empty">لا مهام لمسار ${esc(t.name)} في هذا اليوم (${t.entry_mode === 'weekly' ? `بطاقة أسبوعية يوم ${DAYS[t.sard_day ?? 3]}` : daysText(t.days)}).</div>` : `
+    <div id="tList">${circles.map((c) => {
+      const x = byCircle[c.id];
+      const hint = recs.some((r) => enrCircle[r.enrollment_id] === c.id) ? `حسب إدخال المشرفة: ${fromEntry(c.id, ['present', 'late'])} حاضرة، ${fromEntry(c.id, ['absent'])} غائبة، ${fromEntry(c.id, ['excused'])} معتذرة` : 'لم تُدخل مشرفة الحلقة بيانات هذا اليوم بعد';
+      return `<article class="stu${x ? ' marked' : ''}" data-cid="${c.id}">
+        <div class="stu-head"><b>${esc(c.name)}</b>${x ? '<span class="tag olive">تمَّت</span>' : '<span class="tag amber">لم تتم</span>'}</div>
+        <div class="task-grid">
+          <label class="field">عدد الحاضرات<input class="input" type="number" min="0" inputmode="numeric" data-k="present_count" value="${x?.present_count ?? ''}" ${editable ? '' : 'disabled'}></label>
+          <label class="field">عدد الغائبات<input class="input" type="number" min="0" inputmode="numeric" data-k="absent_count" value="${x?.absent_count ?? ''}" ${editable ? '' : 'disabled'}></label>
+          <label class="field">عدد المعتذرات<input class="input" type="number" min="0" inputmode="numeric" data-k="excused_count" value="${x?.excused_count ?? ''}" ${editable ? '' : 'disabled'}></label>
+        </div>
+        <p class="hint-line">${hint}</p></article>`;
+    }).join('')}</div>
+    ${editable ? '<div class="save-dock"><button class="btn" id="saveTasks">حفظ المهام</button></div>' : '<div class="sheet empty" style="margin-top:12px">انتهى وقت هذه المهام، ولا يمكن تعديلها.</div>'}`}</div>`;
+    $('#tDate').onchange = (e) => { if (e.target.value) { TASK.date = e.target.value; route(); } };
+    const sv = $('#saveTasks');
+    if (sv) sv.onclick = async () => {
+      if (!taskOpen(date) && !isAdmin()) { toast('انتهى وقت هذه المهام', 'bad'); route(); return; }
+      const rows = []; const bad = [];
+      $$('#tList .stu', v).forEach((card) => {
+        const val = (k) => card.querySelector(`[data-k="${k}"]`).value;
+        const vals = ['present_count', 'absent_count', 'excused_count'].map(val);
+        if (vals.every((x) => x === '')) return;
+        if (vals.some((x) => x === '')) { bad.push(card.querySelector('b').textContent); return; }
+        rows.push({ circle_id: +card.dataset.cid, task_date: date, present_count: +vals[0], absent_count: +vals[1], excused_count: +vals[2], done_by: S.me.id, updated_at: new Date().toISOString() });
+      });
+      if (bad.length) { toast(`${bad[0]}: اكتبي الأعداد الثلاثة (صفر إن لم يوجد)`, 'bad'); return; }
+      if (!rows.length) { toast('اكتبي أعداد حلقة واحدة على الأقل', 'bad'); return; }
+      sv.disabled = true;
+      try { await api.upsert('daily_tasks', rows, 'circle_id,task_date'); toast(`حُفظت مهام ${rows.length} حلقة 🌿`, 'ok'); route(); }
+      catch (err) { toast(translateError(err.message), 'bad'); sv.disabled = false; }
+    };
+    return;
+  }
+
+  // ---------- القائدة: من أتمَّت ومن لم تُتم ----------
+  const leads = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && p.track_id === tid);
+  const rows = myTracks.map((t) => {
+    const cs = circles.filter((c) => c.track_id === t.id);
+    const done = cs.filter((c) => byCircle[c.id]).length;
+    const sum = (k) => cs.reduce((n, c) => n + (byCircle[c.id]?.[k] || 0), 0);
+    return { t, cs, done, total: cs.length, present: sum('present_count'), absent: sum('absent_count'), excused: sum('excused_count') };
+  });
+  const complete = rows.filter((r) => r.total && r.done === r.total).length;
+  const status = (r) => !r.total ? ['gray', 'لا حلقات'] : r.done === r.total ? ['olive', 'أتمَّت المهام'] : r.done ? ['amber', `${r.done} من ${r.total}`] : ['red', 'لم تبدأ'];
+  v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية', dateLine)}
+  <div class="strip">
+    <div><div class="n olive num">${complete}</div><div class="l">مسؤولة أتمَّت مهامها</div></div>
+    <div><div class="n red num">${rows.length - complete}</div><div class="l">لم تُتم بعد</div></div>
+    <div><div class="n num">${rows.reduce((n, r) => n + r.present, 0)}</div><div class="l">حاضرة (حسب المهام)</div></div>
+    <div><div class="n num" style="font-size:1.1rem;padding-top:8px">${open ? left : '—'}</div><div class="l">${open ? 'حتى إغلاق المهام (٥ص مكة)' : deadlineLine}</div></div>
+  </div>
+  <div class="toolbar"><label class="field">اليوم<input class="input" type="date" id="tDate" value="${date}" max="${current}"></label></div>
+  ${rows.length ? `<section class="sheet"><div class="lines">${rows.map((r) => {
+    const st = status(r);
+    return `<details class="task-row"><summary class="line"><div class="grow"><div class="t">مسار ${esc(r.t.name)}</div>
+      <div class="s">${esc(leads(r.t.id).map((p) => p.full_name).join('، ') || 'بلا مسؤولة')}</div>
+      <div class="s num">${r.present} حاضرة، ${r.absent} غائبة، ${r.excused} معتذرة</div></div>
+      <span class="tag ${st[0]}">${st[1]}</span></summary>
+      <div class="table-wrap" style="margin:4px 0 12px"><table><thead><tr><th>الحلقة</th><th>الحاضرات</th><th>الغائبات</th><th>المعتذرات</th><th>الحالة</th></tr></thead><tbody>
+      ${r.cs.map((c) => { const x = byCircle[c.id]; return `<tr><td>${esc(c.name)}</td><td class="num">${x ? x.present_count : '—'}</td><td class="num">${x ? x.absent_count : '—'}</td><td class="num">${x ? x.excused_count : '—'}</td><td>${x ? '<span class="tag olive">تمَّت</span>' : '<span class="tag red">لم تتم</span>'}</td></tr>`; }).join('')}
+      </tbody></table></div></details>`;
+  }).join('')}</div></section>` : '<div class="sheet empty">لا مسارات لها حلقات في هذا اليوم.</div>'}</div>`;
+  $('#tDate').onchange = (e) => { if (e.target.value) { TASK.date = e.target.value; route(); } };
+};
+
+/* =========================================================
+   السرد الأسبوعي الإلزامي
+   من لم تسرد أسبوعين متتاليين تصل حدَّ الحذف من المقرأة
+   ========================================================= */
+const SARD = { circleId: null, date: null };
+const SARD_LIMIT = 2;
+// آخر أيام سرد المسار (من الأحدث)، حتى اليوم
+function sardDates(track, n = 6, upTo = today()) {
+  if (track?.sard_day == null) return [];
+  const out = []; let d = upTo;
+  for (let i = 0; i < 7 && new Date(d + 'T12:00:00').getDay() !== track.sard_day; i++) d = addDays(d, -1);
+  for (let i = 0; i < n; i++) { out.push(d); d = addDays(d, -7); }
+  return out;
+}
+const sardTracks = () => S.tracks.filter((t) => t.sard_day != null);
+// عدد الأسابيع المتتالية التي لم تسرد فيها (من الأحدث)، ولا يُحسب أسبوع لم يُسجَّل
+function sardStreak(enr, dates, byKey) {
+  let streak = 0; let unrecorded = 0; const trail = [];
+  for (const d of dates) {
+    if (enr.started_at && d < enr.started_at) break;
+    const x = byKey[`${enr.id}|${d}`];
+    trail.push(x ? (x.done ? 'done' : 'miss') : 'none');
+  }
+  for (const t of trail) { if (t === 'miss') streak++; else if (t === 'none' && streak === 0) unrecorded++; else break; }
+  return { streak, trail, unrecorded };
+}
+async function sardOverview(circles) {
+  const rows = [];
+  const enrs = activeEnrollments(circles.map((c) => c.id));
+  if (!enrs.length) return { rows, missingCircles: [] };
+  const from = addDays(today(), -60);
+  const sards = await api.list('weekly_sard', { gte: { sard_date: from }, in: { enrollment_id: enrs.map((e) => e.id) } });
+  const byKey = Object.fromEntries(sards.map((x) => [`${x.enrollment_id}|${x.sard_date}`, x]));
+  const missingCircles = [];
+  circles.forEach((c) => {
+    const t = trackOfCircle(c); const dates = sardDates(t, 6);
+    if (!dates.length) return;
+    const ce = enrs.filter((e) => e.circle_id === c.id);
+    if (ce.length && !ce.some((e) => byKey[`${e.id}|${dates[0]}`])) missingCircles.push({ c, date: dates[0] });
+    ce.forEach((e) => { const st = sardStreak(e, dates, byKey); rows.push({ e, c, t, dates, ...st }); });
+  });
+  return { rows, missingCircles, byKey };
+}
+const trailHtml = (r) => `<span class="trail">${r.trail.slice(0, 4).map((x, i) => `<i class="${x}" title="${fmtShort(r.dates[i])}: ${x === 'done' ? 'سردت' : x === 'miss' ? 'لم تسرد' : 'لم يُسجَّل'}"></i>`).join('')}</span>`;
+
+PAGES.sard = async (v) => {
+  const circles = myCircles().filter((c) => trackOfCircle(c)?.sard_day != null);
+  if (!circles.length) { v.innerHTML = `<div class="wrap">${cartouche('السرد الأسبوعي')}<div class="sheet empty">لا حلقات مطالَبة بالسرد في نطاقكِ (مسارا تمكين ووهج غير مطالَبين).</div></div>`; return; }
+  if (!circles.some((c) => c.id === SARD.circleId)) SARD.circleId = circles[0].id;
+  const circle = circleById(SARD.circleId); const track = trackOfCircle(circle);
+  const dates = sardDates(track, 6);
+  if (!SARD.date || !dates.includes(SARD.date)) SARD.date = dates[0];
+  const enr = activeEnrollments([circle.id]).map((e) => ({ e, s: studentById(e.student_id) })).filter((x) => x.s).sort((a, b) => byName(a.s, b.s));
+  const { rows, missingCircles, byKey } = await sardOverview(myCircles());
+  const limit = rows.filter((r) => r.streak >= SARD_LIMIT).sort((a, b) => b.streak - a.streak);
+  const warn = rows.filter((r) => r.streak === SARD_LIMIT - 1);
+  const canRemove = isAdmin() || isSup();
+
+  v.innerHTML = `<div class="wrap">${cartouche('السرد الأسبوعي', 'الخميس لمسارات الجامعيات، والأربعاء للأطفال والناشئة. من لم تسرد أسبوعين متتاليين تصل حدَّ الحذف.')}
+  <p class="legend" style="justify-content:center;margin:-10px 0 16px">المربعات آخر ٤ أسابيع، الأحدث على اليمين: <span><i style="background:var(--olive)"></i>سردت</span><span><i style="background:var(--red)"></i>لم تسرد</span><span><i style="background:#efe6ea"></i>لم يُسجَّل</span></p>
+  <section class="sheet"><h2>وصلن حدَّ الحذف <small>أسبوعان متتاليان دون سرد</small></h2><div class="lines">
+    ${limit.map((r) => `<div class="line"><span class="initial rose">${esc(initial(studentById(r.e.student_id)?.full_name))}</span>
+      <div class="grow"><a class="t" href="#/student/${r.e.student_id}">${esc(studentById(r.e.student_id)?.full_name)}</a><div class="s">${esc(r.c.name)}، فاتها ${r.streak} ${r.streak === 2 ? 'أسبوعان' : 'أسابيع'}</div></div>
+      ${trailHtml(r)}${canRemove ? `<button class="btn sm danger" data-remove="${r.e.student_id}">حذفها من المقرأة</button>` : '<span class="tag red">وصلت الحد</span>'}</div>`).join('') || '<div class="empty">لا طالبة وصلت الحد، الحمد لله 🌿</div>'}
+  </div></section>
+  ${warn.length ? `<section class="sheet"><h2>إنذار <small>فاتها سرد الأسبوع الماضي، والأسبوع القادم حاسم</small></h2><div class="lines">
+    ${warn.map((r) => `<a class="line" href="#/student/${r.e.student_id}"><span class="initial">${esc(initial(studentById(r.e.student_id)?.full_name))}</span>
+      <div class="grow"><div class="t">${esc(studentById(r.e.student_id)?.full_name)}</div><div class="s">${esc(r.c.name)}</div></div>${trailHtml(r)}<span class="tag amber">أسبوع واحد</span></a>`).join('')}
+  </div></section>` : ''}
+  ${missingCircles.length ? `<section class="sheet"><h2>لم يُسجَّل سرد آخر أسبوع <small>${missingCircles.length} حلقة</small></h2><div class="choices">
+    ${missingCircles.map(({ c, date }) => `<button class="tag amber" style="border:0;cursor:pointer" data-goto="${c.id}" data-date="${date}">${esc(c.name)}، ${fmtShort(date)}</button>`).join('')}</div></section>` : ''}
+
+  <section class="sheet" id="sardEntry"><h2>تسجيل السرد</h2>
+    <div class="entry-head">
+      <label class="field">الحلقة<select class="input" id="sCircle">${circles.map((c) => `<option value="${c.id}"${c.id === circle.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+      <label class="field">يوم السرد<select class="input" id="sDate">${dates.map((d) => `<option value="${d}"${d === SARD.date ? ' selected' : ''}>${fmtDate(d)}</option>`).join('')}</select></label>
+    </div>
+    <div class="entry-meta"><span>مسار ${esc(track.name)}: السرد يوم ${DAYS[track.sard_day]}</span><button class="btn sm quiet" id="allDone">سردت البقية</button></div>
+    <div id="sList">${enr.map(({ e, s }) => {
+      const x = byKey?.[`${e.id}|${SARD.date}`]; const st = x ? (x.done ? 'done' : 'miss') : '';
+      const r = rows.find((y) => y.e.id === e.id);
+      return `<article class="stu${x ? ' marked' : ''}" data-eid="${e.id}" data-st="${st}">
+        <div class="stu-head"><span class="initial">${esc(initial(s.full_name))}</span><b>${esc(s.full_name)}</b>${r ? trailHtml(r) : ''}</div>
+        <div class="choices"><button type="button" class="choice${st === 'done' ? ' on' : ''}" data-v="present" data-k="done">سردت</button><button type="button" class="choice${st === 'miss' ? ' on' : ''}" data-v="absent" data-k="miss">لم تسرد</button></div>
+      </article>`;
+    }).join('') || '<div class="empty">لا طالبات في هذه الحلقة</div>'}</div>
+    ${enr.length ? '<button class="btn block" id="saveSard" style="margin-top:14px">حفظ السرد</button>' : ''}
+  </section></div>`;
+
+  $('#sCircle').onchange = (e) => { SARD.circleId = +e.target.value; SARD.date = null; route(); };
+  $('#sDate').onchange = (e) => { SARD.date = e.target.value; route(); };
+  $$('[data-goto]', v).forEach((b) => (b.onclick = () => { SARD.circleId = +b.dataset.goto; SARD.date = b.dataset.date; route(); }));
+  const setSt = (card, st) => { card.dataset.st = st; $$('.choice', card).forEach((x) => x.classList.toggle('on', x.dataset.k === st)); };
+  $$('#sList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); setSt(c, c.dataset.st === b.dataset.k ? '' : b.dataset.k); }));
+  const ad = $('#allDone'); if (ad) ad.onclick = () => $$('#sList .stu', v).forEach((c) => { if (!c.dataset.st) setSt(c, 'done'); });
+  const sv = $('#saveSard');
+  if (sv) sv.onclick = async () => {
+    const list = $$('#sList .stu', v).filter((c) => c.dataset.st).map((c) => ({ enrollment_id: +c.dataset.eid, sard_date: SARD.date, done: c.dataset.st === 'done', note: null, recorded_by: S.me.id, updated_at: new Date().toISOString() }));
+    if (!list.length) { toast('حدِّدي حالة طالبة واحدة على الأقل', 'bad'); return; }
+    sv.disabled = true;
+    try { await api.upsert('weekly_sard', list, 'enrollment_id,sard_date'); toast(`حُفظ سرد ${list.length} طالبة 🌿`, 'ok'); route(); }
+    catch (err) { toast(translateError(err.message), 'bad'); sv.disabled = false; }
+  };
+  $$('[data-remove]', v).forEach((b) => (b.onclick = async () => {
+    const st = studentById(+b.dataset.remove);
+    if (!(await confirmBox(`حذف ${st.full_name} من المقرأة؟ يُنهى التحاقها بحلقاتها وتصير غير نشطة، ويبقى سجلُّها محفوظًا.`, 'حذفها من المقرأة'))) return;
+    try {
+      for (const e of S.enrollments.filter((x) => x.student_id === st.id && x.active)) await api.update('enrollments', e.id, { active: false, ended_at: today() });
+      await api.update('students', st.id, { active: false, notes: [st.notes, `حُذفت لعدم السرد أسبوعين متتاليين (${fmtShort(today())})`].filter(Boolean).join('\n') });
+      await loadAll(); toast('حُذفت من المقرأة', 'ok'); route();
+    } catch (err) { toast(translateError(err.message), 'bad'); }
+  }));
+};
+
+/* =========================================================
+   حسابي
+   ========================================================= */
+PAGES.account = async (v) => {
+  const mine = S.circles.filter((c) => c.teacher_id === S.me.id);
+  v.innerHTML = `<div class="wrap">${cartouche('حسابي')}
+  <section class="sheet"><div class="profile"><span class="initial lg">${esc(initial(S.me.full_name))}</span>
+    <div class="grow"><h2>${esc(S.me.full_name)}</h2><div style="color:var(--ink-3)" dir="ltr">@${esc(S.me.username)}</div></div></div>
+    <dl class="facts"><div><dt>الدور</dt><dd>${ROLE[role()]}</dd></div>
+      ${isSup() ? `<div><dt>المسار</dt><dd>${esc(trackName(S.me.track_id))}</dd></div>` : ''}
+      ${mine.length ? `<div><dt>حلقاتي</dt><dd>${esc(mine.map((c) => c.name).join('، '))}</dd></div>` : ''}</dl></section>
+  ${api.mode === 'live' ? `<section class="sheet"><h2>تغيير كلمة المرور</h2>
+    <form id="pw" style="display:grid;gap:10px;max-width:360px"><input class="input" type="password" name="p1" minlength="6" required placeholder="كلمة المرور الجديدة" dir="ltr" aria-label="كلمة المرور الجديدة"><input class="input" type="password" name="p2" minlength="6" required placeholder="أعيدي كتابتها" dir="ltr" aria-label="تأكيد كلمة المرور"><button class="btn" type="submit">تغيير كلمة المرور</button></form></section>` : ''}
+  ${api.mode === 'demo' ? `<section class="sheet"><h2>جرِّبي دورًا آخر <small>البيانات وهمية وتتجدَّد يوميًّا</small></h2><div class="choices">
+    ${[['u-admin', 'القائدة'], ['u-sup1', 'مسؤولة مسار'], ['u-t1', 'مشرفة حلقة'], ['u-ins1', 'معلِّمة حلقة'], ['u-stu1', 'طالبة']].map(([id, l]) => `<button class="btn sm ${S.me.id === id ? '' : 'ghost'}" data-as="${id}">${l}</button>`).join('')}</div></section>` : ''}
+  ${navItems().filter(([k]) => k !== 'account' && !$$('.dock a').some((a) => a.dataset.nav === k)).length ? `<section class="sheet more-links"><h2>صفحات أخرى</h2><div class="lines">${navItems().filter(([k]) => k !== 'account' && !$$('.dock a').some((a) => a.dataset.nav === k)).map(([k, l]) => `<a class="line" href="#/${k}">${icon(k).replace('<svg', '<svg width="20" height="20"')}<div class="grow t">${l}</div></a>`).join('')}</div></section>` : ''}
+  <section class="sheet"><button class="btn danger block" id="logout">تسجيل الخروج</button></section></div>`;
+  const pw = $('#pw');
+  if (pw) pw.onsubmit = async (e) => {
+    e.preventDefault(); const fd = new FormData(e.target);
+    if (fd.get('p1') !== fd.get('p2')) { toast('كلمتا المرور غير متطابقتين', 'bad'); return; }
+    try { await api.changePassword(fd.get('p1')); e.target.reset(); toast('تغيَّرت كلمة المرور 🌿', 'ok'); } catch (err) { toast(translateError(err.message), 'bad'); }
+  };
+  $$('[data-as]', v).forEach((b) => (b.onclick = async () => { await api.signInAs(b.dataset.as); location.hash = '#/home'; start(); }));
+  $('#logout').onclick = async () => { await api.signOut(); location.hash = ''; start(); };
+};
+
+/* =========================================================
+   التشغيل
+   ========================================================= */
+let booted = false;
+async function start() {
+  try {
+    if (!booted) { await api.init(); booted = true; window.addEventListener('hashchange', () => S.me && ACTIVE_ROLES.includes(role()) && route()); }
+    S.me = await api.currentProfile();
+    if (!S.me) { renderAuth(); return; }
+    if (!ACTIVE_ROLES.includes(S.me.role) || (S.me.role === 'student' && !S.me.student_id)) { renderPending(); return; }
+    await loadAll(); renderShell(); route();
+  } catch (err) {
+    console.error(err);
+    $('#app').innerHTML = `<div class="waiting"><img src="${LOGO}" alt=""><div class="error">${esc(translateError(err.message))}</div><button class="btn" onclick="location.reload()">إعادة المحاولة</button></div>`;
+  }
+}
+document.title = SITE.name;
+start();
