@@ -159,7 +159,9 @@ function translateError(msg = '') {
   if (m.includes('foreign key')) return 'لا يمكن الحذف لوجود بيانات مرتبطة به';
   if (m.includes('password')) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
   if (m.includes('invalid') && m.includes('email')) return 'اكتبي بريدًا إلكترونيًّا صحيحًا';
-  if (m.includes('rate limit')) return 'محاولات كثيرة، انتظري قليلًا ثم أعيدي';
+  if (m.includes('rate limit')) return 'تعذَّر إرسال بريد التأكيد الآن (تجاوز الحدِّ)، أبلغي القائدة';
+  if (m.includes('sending') && m.includes('email')) return 'تعذَّر إرسال بريد التأكيد، أبلغي القائدة';
+  if (m.includes('not confirmed')) return 'بريدكِ غير مؤكَّد بعد، أبلغي القائدة';
   if (m.includes('failed to fetch') || m.includes('network')) return 'تعذَّر الاتصال، تأكدي من الإنترنت';
   return msg || 'حدث خطأ غير متوقع';
 }
@@ -368,8 +370,8 @@ function renderAuth(mode = 'login', error = '', info = '') {
         ${mode === 'signup' ? `<label class="field">الاسم الكامل<input class="input" name="name" required></label>
         <label class="field">نوع الحساب<select class="input" name="requested" required>
           <option value="teacher">مشرفة حلقة</option><option value="supervisor">مسؤولة مسار</option></select></label>
-        <label class="field">المسار<select class="input" name="track" required><option value="">جارٍ تحميل المسارات…</option></select></label>
-        <div class="field" id="circleBox">حلقتكِ (يمكن اختيار أكثر من حلقة)<div class="choices" id="circleChoices"><span class="hint-line">اختاري المسار أولًا</span></div></div>` : ''}
+        <label class="field">المسار<select class="input" name="track"><option value="">جارٍ تحميل المسارات…</option></select></label>
+        <div class="field" id="circleBox">حلقاتكِ (يمكن اختيار حلقات من مسارات مختلفة: اختاري المسار ثم الحلقة، ثم مسارًا آخر)<div class="choices" id="circleChoices"><span class="hint-line">اختاري المسار أولًا</span></div><div class="choices" id="circlePicked" style="margin-top:8px"></div></div>` : ''}
         <label class="field">البريد الإلكتروني<input class="input" name="username" type="email" required dir="ltr" autocomplete="email" inputmode="email"></label>
         <label class="field">كلمة المرور<input class="input" name="password" type="password" required minlength="6" dir="ltr" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
         ${error ? `<div class="error" role="alert">${esc(error)}</div>` : ''}
@@ -388,7 +390,8 @@ function renderAuth(mode = 'login', error = '', info = '') {
     btn.disabled = true;
     try {
       if (mode === 'signup') {
-        const circlesPicked = fd.getAll('circle').map(Number);
+        const circlesPicked = [...SIGNUP_PICKED];
+        if (fd.get('requested') === 'supervisor' && !fd.get('track')) { btn.disabled = false; toast('اختاري مساركِ', 'bad'); return; }
         if (fd.get('requested') === 'teacher' && !circlesPicked.length) { btn.disabled = false; toast('اختاري حلقتكِ', 'bad'); return; }
         const r = await api.signUp(fd.get('name').trim(), fd.get('username'), fd.get('password'), fd.get('requested'), +fd.get('track') || null, fd.get('requested') === 'teacher' ? circlesPicked : []);
         if (r === 'confirm') { renderAuth('login', '', 'أُنشئ حسابكِ 🌸 افتحي رابط التأكيد الذي وصل إلى بريدكِ، ثم ادخلي.'); return; }
@@ -398,18 +401,27 @@ function renderAuth(mode = 'login', error = '', info = '') {
   };
 }
 
-// خيارات التسجيل: المسار، والحلقات الشاغرة لمشرفة الحلقة
+// خيارات التسجيل: المسار، والحلقات الشاغرة لمشرفة الحلقة (من مسارات مختلفة)
+const SIGNUP_PICKED = new Set();
 async function loadSignupOptions() {
   const form = $('#authForm'); if (!form) return;
   const trackSel = form.querySelector('[name=track]'); const roleSel = form.querySelector('[name=requested]');
-  const box = $('#circleBox'); const list = $('#circleChoices');
+  const box = $('#circleBox'); const list = $('#circleChoices'); const picked = $('#circlePicked');
+  SIGNUP_PICKED.clear();
   let opts;
-  try { opts = await api.signupOptions(); } catch (err) { trackSel.innerHTML = '<option value="">تعذَّر تحميل المسارات</option>'; return; }
+  try { opts = await api.signupOptions(); } catch (err) { trackSel.innerHTML = '<option value="">تعذَّر تحميل المسارات، حدِّثي الصفحة</option>'; return; }
+  const tname = (id) => (opts.tracks || []).find((t) => t.id === id)?.name || '';
   trackSel.innerHTML = '<option value="">اختاري المسار</option>' + (opts.tracks || []).map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  const drawPicked = () => {
+    const cs = (opts.circles || []).filter((c) => SIGNUP_PICKED.has(c.id));
+    picked.innerHTML = cs.length ? `<span class="hint-line">اخترتِ:</span>${cs.map((c) => `<button type="button" class="tag rose" data-unpick="${c.id}" style="border:0;cursor:pointer">${esc(c.name)} ✕</button>`).join('')}` : '';
+    $$('[data-unpick]', picked).forEach((b) => (b.onclick = () => { SIGNUP_PICKED.delete(+b.dataset.unpick); drawPicked(); drawCircles(); }));
+  };
   const drawCircles = () => {
     const tid = +trackSel.value;
     const cs = (opts.circles || []).filter((c) => c.track_id === tid).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ar', { numeric: true }));
-    list.innerHTML = !tid ? '<span class="hint-line">اختاري المسار أولًا</span>' : cs.map((c) => `<label class="choice${c.taken ? ' taken' : ''}"><input type="checkbox" name="circle" value="${c.id}" ${c.taken ? 'disabled' : ''} style="accent-color:var(--rose-deep)"> ${esc(c.name)}${c.taken ? ' (لها مشرفة)' : ''}</label>`).join('') || '<span class="hint-line">لا حلقات في هذا المسار</span>';
+    list.innerHTML = !tid ? '<span class="hint-line">اختاري المسار أولًا</span>' : cs.map((c) => `<label class="choice${c.taken ? ' taken' : ''}"><input type="checkbox" value="${c.id}" ${c.taken ? 'disabled' : ''} ${SIGNUP_PICKED.has(c.id) ? 'checked' : ''} style="accent-color:var(--rose-deep)"> ${esc(c.name)}${c.taken ? ' (لها مشرفة)' : ''}</label>`).join('') || '<span class="hint-line">لا حلقات في هذا المسار</span>';
+    $$('input', list).forEach((x) => (x.onchange = () => { x.checked ? SIGNUP_PICKED.add(+x.value) : SIGNUP_PICKED.delete(+x.value); drawPicked(); }));
   };
   const syncRole = () => box.classList.toggle('hidden', roleSel.value !== 'teacher');
   trackSel.onchange = drawCircles; roleSel.onchange = syncRole; syncRole();
