@@ -92,6 +92,15 @@ const ACTIVE_ROLES = ['admin', 'supervisor', 'teacher']; // المعلِّمات
 /* ---------------- أدوات عامة ---------------- */
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+/** ينظّف بنود قالب البطاقة: يتجاهل عنوان البطاقة وسطر الاسم، ويزيل الزخارف والتطويل والتشكيل والنقطتين */
+function cleanTemplateItems(text) {
+  const strip = (s) => String(s).replace(/[ً-ٟـٰ]/g, '').replace(/[*_~`]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return String(text || '').split('\n').map((raw) => {
+    const t = strip(raw);
+    if (!t || /^بطاقة\s*(ال)?حضور/.test(t) || t === 'الاسم') return null;
+    return t;
+  }).filter(Boolean);
+}
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = (n) => String(n).padStart(2, '0');
 const dateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -1239,7 +1248,7 @@ PAGES.settings = async (v) => {
   (m, close) => {
     m.querySelector('#tf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
-      const row = { name: fd.get('name').trim(), category: fd.get('category').trim() || null, description: fd.get('description').trim() || null, circle_type: fd.get('circle_type'), days: fd.getAll('days').map(Number).sort(), sort_order: +fd.get('sort_order') || 0, card_items: fd.get('card_items').split('\n').map((x) => x.trim()).filter(Boolean), sard_day: fd.get('sard_day') === '' ? null : +fd.get('sard_day'), entry_mode: fd.get('entry_mode') };
+      const row = { name: fd.get('name').trim(), category: fd.get('category').trim() || null, description: fd.get('description').trim() || null, circle_type: fd.get('circle_type'), days: fd.getAll('days').map(Number).sort(), sort_order: +fd.get('sort_order') || 0, card_items: cleanTemplateItems(fd.get('card_items')), sard_day: fd.get('sard_day') === '' ? null : +fd.get('sard_day'), entry_mode: fd.get('entry_mode') };
       if (row.entry_mode === 'weekly' && row.sard_day == null) { toast('البطاقة الأسبوعية تحتاج يوم سرد للمسار', 'bad'); return; }
       if (!row.days.length) { toast('اختاري يومًا واحدًا على الأقل', 'bad'); return; }
       try {
