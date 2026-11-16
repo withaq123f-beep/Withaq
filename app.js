@@ -257,6 +257,11 @@ const trackName = (id) => S.tracks.find((t) => t.id === id)?.name || '—';
 const trackIdsOf = (p) => [...new Set([...(p?.track_ids || []), p?.track_id].filter(Boolean))];
 const myTrackIds = () => (isSup() ? trackIdsOf(S.me) : []);
 const inMyTracks = (tid) => myTrackIds().includes(tid);
+// حلقات اختارتها المشرفة عند التسجيل ولم تُربط بحسابها (محجوزة لغيرها أو لم يتم الربط)
+const unlinkedHint = () => {
+  const req = (S.me?.requested_circles || []).map((id) => circleById(+id)).filter((c) => c && c.teacher_id !== S.me.id);
+  return req.length ? ` اخترتِ «${req.map((c) => c.name).join('، ')}» لكنها لم تُربط بحسابكِ بعد (قد تكون مُسنَدة لمشرفة أخرى)، وستؤكدها القائدة.` : '';
+};
 const trackNames = (ids) => ids.map(trackName).join('، ') || '—';
 const circleById = (id) => S.circles.find((c) => c.id === id);
 const studentById = (id) => S.students.find((s) => s.id === id);
@@ -528,7 +533,7 @@ PAGES.home = async (v) => {
   });
   const top = Object.entries(memo).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const scope = isAdmin() ? 'كل حلقات المقرأة' : isSup() ? trackNames(myTrackIds()) : circles.map((c) => c.name).join('، ') || 'لم تُسنَد إليكِ حلقة بعد';
+  const scope = isAdmin() ? 'كل حلقات المقرأة' : isSup() ? trackNames(myTrackIds()) : circles.map((c) => c.name).join('، ') || ('لم تُسنَد إليكِ حلقة بعد.' + unlinkedHint());
   const juz = monthPages / 20;
   const shortToday = todayRecs.filter((r) => r.shortcoming).length;
   const shortBy = {};
@@ -614,7 +619,7 @@ const trackOfCircle = (c) => S.tracks.find((t) => t.id === c?.track_id);
 
 PAGES.entry = async (v) => {
   const circles = myCircles();
-  if (!circles.length) { v.innerHTML = `<div class="wrap">${cartouche('الإدخال من الواتساب')}<div class="sheet empty">لم تُسنَد إليكِ حلقة بعد. تواصلي مع القائدة 🌿</div></div>`; return; }
+  if (!circles.length) { v.innerHTML = `<div class="wrap">${cartouche('الإدخال من الواتساب')}<div class="sheet empty">لم تُسنَد إليكِ حلقة بعد.${esc(unlinkedHint())} تواصلي مع القائدة 🌿</div></div>`; return; }
   if (!circles.some((c) => c.id === ENTRY.circleId)) ENTRY.circleId = circles[0].id;
   const circle = circleById(ENTRY.circleId);
   const track = trackOfCircle(circle);
@@ -1115,6 +1120,10 @@ function profileForm(p) {
     <form class="form-grid" id="pf">
       <label class="field full">الاسم<input class="input" name="full_name" required value="${esc(p.full_name)}"></label>
       ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b>${p.requested_role === 'supervisor' && p.track_id ? `، مسار ${esc(trackName(p.track_id))}` : ''}${(p.requested_circles || []).length ? `، الحلقات: ${esc(p.requested_circles.map((id) => circleById(+id)?.name).filter(Boolean).join('، '))}` : ''}</p>` : ''}
+      ${(p.requested_circles || []).some((id) => circleById(+id)) ? `<div class="full"><p style="font-size:.88rem;margin-bottom:6px">الحلقات التي اختارتها عند التسجيل:</p>
+        ${(p.requested_circles || []).map((id) => circleById(+id)).filter(Boolean).map((c) => c.teacher_id === p.id
+          ? `<div class="choices" style="margin-bottom:6px"><span class="tag olive">${esc(c.name)}: مربوطة بحسابها</span></div>`
+          : `<div class="choices" style="margin-bottom:6px;align-items:center"><span class="tag ${c.teacher_id ? 'red' : 'amber'}">${esc(c.name)}: ${c.teacher_id ? 'عند ' + esc(profileName(c.teacher_id)) : 'غير مربوطة'}</span><button type="button" class="btn sm ${c.teacher_id ? 'ghost' : ''}" data-claim="${c.id}">${c.teacher_id ? 'نقلها إليها' : 'ربطها بها'}</button></div>`).join('')}</div>` : ''}
       ${S.circles.some((c) => c.teacher_id === p.id) ? `<p class="full" style="color:var(--olive-deep);font-size:.88rem">مربوطة بحلقات: ${esc(S.circles.filter((c) => c.teacher_id === p.id).map((c) => c.name).join('، '))}</p>` : ''}
       <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
       <fieldset class="field full" id="trackField" style="border:0;padding:0;margin:0"><legend style="margin-bottom:6px">مساراتها <small style="color:var(--ink-3)">(يمكن اختيار أكثر من مسار)</small></legend>
@@ -1126,6 +1135,13 @@ function profileForm(p) {
     const HINTS = { teacher: 'تُسنَد حلقاتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب والسرد.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
     const sync = () => { tf.classList.toggle('hidden', rs.value !== 'supervisor'); hint.textContent = HINTS[rs.value] || ''; };
     rs.onchange = sync; sync();
+    $$('[data-claim]', m).forEach((b) => (b.onclick = async () => {
+      const c = circleById(+b.dataset.claim);
+      close();
+      if (c.teacher_id && c.teacher_id !== p.id && !(await confirmBox(`حلقة ${c.name} عند ${profileName(c.teacher_id)} الآن. تنقلينها إلى ${p.full_name}؟`, 'نعم، انقليها'))) return;
+      try { await api.update('circles', c.id, { teacher_id: p.id }); await loadAll(); toast(`رُبطت ${c.name} بحساب ${p.full_name} 🌸`, 'ok'); route(); }
+      catch (err) { toast(translateError(err.message), 'bad'); }
+    }));
     const da = m.querySelector('#arcAcc'); if (da) da.onclick = async () => { close(); archiveAccount(p); };
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
