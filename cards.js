@@ -601,13 +601,19 @@ function itemKey(label) {
 function splitWithaqCards(text) {
   const PREFIX = /^\s*\[([^\]]*)\]\s*([^:]*?)\s*:\s*(.*)$/;
   const cards = []; let cur = null;
+  // عنوان بند الاسم في السطر (إن كان السطر «الاسم : ...»)، لتمييز بداية بطاقة جديدة
+  const nameLabel = (l) => { const t = cleanLine(l); const k = t.indexOf(':'); if (k <= 0) return null; const lab = t.slice(0, k).trim(); return itemKey(lab) === 'name' ? norm(lab) : null; };
   const hasItems = (c) => c.lines.some((l) => { const t = cleanLine(l); const k = t.indexOf(':'); return k > 0 && !itemKey(t.slice(0, k)).startsWith('x:') && !/بطاقه\s*الحضور/.test(norm(t)); });
   for (const line of String(text).split(/\r?\n/)) {
     const m = PREFIX.exec(line);
-    if (m) { cur = { sender: (m[2] || '').split('|')[0].trim() || null, lines: [m[3] || ''] }; cards.push(cur); continue; }
+    if (m) { cur = { sender: (m[2] || '').split('|')[0].trim() || null, lines: [m[3] || ''], nameLabel: nameLabel(m[3] || '') }; cards.push(cur); continue; }
     const isHead = /بطاقه\s*الحضور/.test(norm(cleanLine(line)));
     if (isHead && (!cur || hasItems(cur))) { cur = { sender: null, lines: [line] }; cards.push(cur); continue; }
+    // بطاقات متتالية بلا عنوان ولا بادئة: تكرُّر بند «الاسم» نفسه يعني بطاقة جديدة، وإلا قُرئت كلها بطاقةً واحدة
+    const nl = nameLabel(line);
+    if (nl && cur && cur.nameLabel === nl) cur = null;
     if (!cur) { cur = { sender: null, lines: [] }; cards.push(cur); }
+    if (nl && !cur.nameLabel) cur.nameLabel = nl;
     cur.lines.push(line);
   }
   return cards.map((c) => readCard(c)).filter((c) => c.items.length);
