@@ -253,12 +253,17 @@ const teacherById = (id) => S.teachers.find((t) => t.id === id);
 const instructorName = (c) => teacherById(c?.teacher_ref)?.full_name || c?.teacher_name || '';
 const profileName = (id) => S.profiles.find((p) => p.id === id)?.full_name || '—';
 const trackName = (id) => S.tracks.find((t) => t.id === id)?.name || '—';
+// مسارات مسؤولة المسار: مسارها الأساسي من التسجيل + ما أسندته القائدة لها
+const trackIdsOf = (p) => [...new Set([...(p?.track_ids || []), p?.track_id].filter(Boolean))];
+const myTrackIds = () => (isSup() ? trackIdsOf(S.me) : []);
+const inMyTracks = (tid) => myTrackIds().includes(tid);
+const trackNames = (ids) => ids.map(trackName).join('، ') || '—';
 const circleById = (id) => S.circles.find((c) => c.id === id);
 const studentById = (id) => S.students.find((s) => s.id === id);
 
 function myCircles(includeInactive = false) {
   return S.circles.filter((c) => (includeInactive || c.active) && (
-    isAdmin() || (isSup() && c.track_id === S.me.track_id) || (role() === 'teacher' && c.teacher_id === S.me.id)
+    isAdmin() || (isSup() && inMyTracks(c.track_id)) || (role() === 'teacher' && c.teacher_id === S.me.id)
     || (isIns() && c.instructor_id === S.me.id)
     || (isStu() && S.enrollments.some((e) => e.active && e.circle_id === c.id && e.student_id === S.me.student_id))));
 }
@@ -523,7 +528,7 @@ PAGES.home = async (v) => {
   });
   const top = Object.entries(memo).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const scope = isAdmin() ? 'كل حلقات المقرأة' : isSup() ? trackName(S.me.track_id) : circles.map((c) => c.name).join('، ') || 'لم تُسنَد إليكِ حلقة بعد';
+  const scope = isAdmin() ? 'كل حلقات المقرأة' : isSup() ? trackNames(myTrackIds()) : circles.map((c) => c.name).join('، ') || 'لم تُسنَد إليكِ حلقة بعد';
   const juz = monthPages / 20;
   const shortToday = todayRecs.filter((r) => r.shortcoming).length;
   const shortBy = {};
@@ -533,7 +538,7 @@ PAGES.home = async (v) => {
   let banner = '';
   if (isAdmin() || isSup()) {
     const td = taskDay();
-    const ts = tracksOn(td).filter((t) => isAdmin() || t.id === S.me.track_id);
+    const ts = tracksOn(td).filter((t) => isAdmin() || inMyTracks(t.id));
     const tcs = S.circles.filter((c) => c.active && ts.some((t) => t.id === c.track_id));
     const done = tcs.length ? await api.list('daily_tasks', { eq: { task_date: td }, in: { circle_id: tcs.map((c) => c.id) } }) : [];
     const doneSet = new Set(done.map((x) => x.circle_id));
@@ -698,10 +703,14 @@ PAGES.entry = async (v) => {
       const rest = enr.filter((x) => !picked.has(x.e.id));
       $('#noCardCount').textContent = rest.length ? `${rest.length}` : '';
       const prev = Object.fromEntries($$('#noCardList .stu', v).map((c) => [c.dataset.eid, c.dataset.att]));
+      const savedBy = Object.fromEntries(existing.map((r) => [r.enrollment_id, r]));
       $('#noCardList').innerHTML = rest.map((x) => {
-        const att = prev[x.e.id] ?? 'absent';
+        // من لها سجل محفوظ لهذا اليوم تبقى كما هي، فلا تمحو دفعةٌ جديدة حضورَ الدفعات السابقة
+        const saved = savedBy[x.e.id];
+        const att = prev[x.e.id] ?? (saved ? 'keep' : 'absent');
+        const opts = saved ? [['keep', `كما هي: ${ATT[saved.attendance] || ''}`], ['absent', 'غائبة'], ['excused', 'مستأذنة']] : [['absent', 'غائبة'], ['excused', 'مستأذنة'], ['', 'بلا تسجيل']];
         return `<article class="stu" data-eid="${x.e.id}" data-att="${att}"><div class="stu-head"><span class="initial">${esc(initial(x.s.full_name))}</span><b>${esc(x.s.full_name)}</b></div>
-        <div class="choices">${[['absent', 'غائبة'], ['excused', 'مستأذنة'], ['', 'بلا تسجيل']].map(([k, l]) => `<button type="button" class="choice${att === k ? ' on' : ''}" data-v="${k || 'none'}" data-k="${k}">${l}</button>`).join('')}</div></article>`;
+        <div class="choices">${opts.map(([k, l]) => `<button type="button" class="choice${att === k ? ' on' : ''}" data-v="${k || 'none'}" data-k="${k}">${l}</button>`).join('')}</div></article>`;
       }).join('') || '<div class="empty">وصلت بطاقات كل الطالبات 🌸</div>';
       $$('#noCardList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); c.dataset.att = b.dataset.k; $$('.choice', c).forEach((x) => x.classList.toggle('on', x === b)); }));
     };
@@ -728,14 +737,20 @@ PAGES.entry = async (v) => {
         rows.set(eid, row);
       });
       if (unpicked.length) { toast(`حدِّدي الطالبة لبطاقة: ${unpicked[0]}`, 'bad'); return; }
+      const carded = rows.size; let newAbsent = 0;
       $$('#noCardList .stu', v).forEach((c) => {
-        if (!c.dataset.att) return;
+        if (!c.dataset.att || c.dataset.att === 'keep') return;
+        if (c.dataset.att === 'absent' && !existing.some((r) => r.enrollment_id === +c.dataset.eid && r.attendance === 'absent')) newAbsent++;
         rows.set(+c.dataset.eid, { enrollment_id: +c.dataset.eid, record_date: ENTRY.date, attendance: c.dataset.att, grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
           memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
           memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null });
       });
       const list = [...rows.values()];
       if (!list.length) { toast('لا يوجد ما يُحفظ', 'bad'); return; }
+      // حماية من الخطأ الشائع: لصقُ جزءٍ من البطاقات ثم الحفظ، فيُسجَّل غياب الباقيات
+      if (newAbsent >= 3 && newAbsent > carded) {
+        if (!(await confirmBox(`قرأتُ ${carded} بطاقة فقط، وسيُسجَّل غياب ${newAbsent} طالبة لأنه لم تصل لهن بطاقة. هل لصقتِ كل بطاقات اليوم؟`, 'نعم، سجِّليهن غائبات'))) return;
+      }
       const btn = $('#saveCards'); btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
       try {
         await api.upsert('daily_records', list, 'enrollment_id,record_date');
@@ -1022,8 +1037,8 @@ PAGES.staff = async (v) => {
   const pending = S.profiles.filter((p) => p.role === 'pending');
   const staff = S.profiles.filter((p) => !['pending', 'student', 'disabled'].includes(p.role)).sort(byName);
   const archived = S.profiles.filter((p) => p.role === 'disabled').sort(byName);
-  const leadSups = isSup() ? S.profiles.filter((p) => p.role === 'teacher' && S.circles.some((c) => c.teacher_id === p.id) && S.circles.filter((c) => c.teacher_id === p.id).every((c) => c.track_id === S.me.track_id)).sort(byName) : [];
-  const leadArch = isSup() ? archived.filter((p) => p.archived_track === S.me.track_id && ['teacher', 'pending', null, undefined].includes(p.archived_role)) : [];
+  const leadSups = isSup() ? S.profiles.filter((p) => p.role === 'teacher' && S.circles.some((c) => c.teacher_id === p.id) && S.circles.filter((c) => c.teacher_id === p.id).every((c) => inMyTracks(c.track_id))).sort(byName) : [];
+  const leadArch = isSup() ? archived.filter((p) => inMyTracks(p.archived_track) && ['teacher', 'pending', null, undefined].includes(p.archived_role)) : [];
   const teachers = isAdmin()
     ? S.profiles.filter((p) => p.role === 'teacher' || (!['pending', 'disabled'].includes(p.role) && S.circles.some((c) => c.teacher_id === p.id))).sort(byName)
     : [...new Set(myCircles().map((c) => c.teacher_id).filter(Boolean))].map((id) => S.profiles.find((p) => p.id === id)).filter(Boolean).sort(byName);
@@ -1045,7 +1060,7 @@ PAGES.staff = async (v) => {
   </section>
   ${isAdmin() ? `<section class="sheet"><h2>الكادر <small>${staff.length}</small></h2><div class="lines">
     ${staff.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div>
-      <div class="s">${p.role === 'supervisor' ? esc(trackName(p.track_id)) : esc(circlesOf(p.id) || '—')}</div></div>
+      <div class="s">${p.role === 'supervisor' ? esc(trackNames(trackIdsOf(p))) : esc(circlesOf(p.id) || '—')}</div></div>
       <span class="tag ${p.role === 'admin' ? 'rose' : p.role === 'supervisor' ? 'olive' : p.role === 'disabled' ? 'gray' : p.role === 'instructor' ? 'blue' : 'amber'}">${ROLE[p.role]}</span></button>`).join('')}
     ${archived.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--ink-3)">الأرشيف (${archived.length})</summary><div class="lines">${archived.map((p) => `<button class="line" data-edit="${esc(p.id)}"><span class="initial">${esc(initial(p.full_name))}</span><div class="grow"><div class="t">${esc(p.full_name)}</div><div class="s">${esc(ROLE[p.archived_role] || '')}</div></div><span class="tag gray">مؤرشفة</span></button>`).join('')}</div></details>` : ''}
   </div></section>
@@ -1102,7 +1117,8 @@ function profileForm(p) {
       ${p.role === 'pending' && ROLE[p.requested_role] ? `<p class="full" style="color:var(--ink-2);font-size:.88rem">سجَّلت بوصفها: <b>${ROLE[p.requested_role]}</b>${p.requested_role === 'supervisor' && p.track_id ? `، مسار ${esc(trackName(p.track_id))}` : ''}${(p.requested_circles || []).length ? `، الحلقات: ${esc(p.requested_circles.map((id) => circleById(+id)?.name).filter(Boolean).join('، '))}` : ''}</p>` : ''}
       ${S.circles.some((c) => c.teacher_id === p.id) ? `<p class="full" style="color:var(--olive-deep);font-size:.88rem">مربوطة بحلقات: ${esc(S.circles.filter((c) => c.teacher_id === p.id).map((c) => c.name).join('، '))}</p>` : ''}
       <label class="field full">الدور<select class="input" name="role" ${self ? 'disabled' : ''}>${['teacher', 'supervisor', 'admin'].map((r) => `<option value="${r}"${initialRole === r ? ' selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
-      <label class="field full" id="trackField">مسارها<select class="input" name="track_id"><option value="">اختاري المسار</option>${S.tracks.map((t) => `<option value="${t.id}"${p.track_id === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <fieldset class="field full" id="trackField" style="border:0;padding:0;margin:0"><legend style="margin-bottom:6px">مساراتها <small style="color:var(--ink-3)">(يمكن اختيار أكثر من مسار)</small></legend>
+        <div class="choices">${S.tracks.map((t) => `<label class="check"><input type="checkbox" name="track_ids" value="${t.id}"${trackIdsOf(p).includes(t.id) ? ' checked' : ''}> ${esc(t.name)}</label>`).join('')}</div></fieldset>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
       <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${!self && isAdmin() ? `<button class="btn danger" type="button" id="arcAcc">${p.role === 'pending' ? 'رفض وأرشفة' : 'أرشفة الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
@@ -1114,8 +1130,13 @@ function profileForm(p) {
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
       const patch = { full_name: fd.get('full_name').trim() };
-      if (!self) { patch.role = fd.get('role'); patch.track_id = patch.role === 'supervisor' ? (+fd.get('track_id') || null) : null; }
-      if (patch.role === 'supervisor' && !patch.track_id) { toast('اختاري مسار مسؤولة المسار', 'bad'); return; }
+      if (!self) {
+        patch.role = fd.get('role');
+        const picked = patch.role === 'supervisor' ? fd.getAll('track_ids').map(Number).filter(Boolean) : [];
+        patch.track_ids = picked;
+        patch.track_id = picked.includes(p.track_id) ? p.track_id : (picked[0] || null); // الأساسي يبقى إن بقي مختارًا
+      }
+      if (patch.role === 'supervisor' && !patch.track_id) { toast('اختاري مسارًا واحدًا على الأقل لمسؤولة المسار', 'bad'); return; }
       try { await api.update('profiles', p.id, patch); await loadAll(); close(); toast(p.role === 'pending' ? 'فُعِّل الحساب 🌸' : 'حُفظ 🌸', 'ok'); route(); }
       catch (err) { toast(translateError(err.message), 'bad'); }
     };
@@ -1124,7 +1145,7 @@ function profileForm(p) {
 
 // معلِّمات الحلقات: بيانات فقط بلا حسابات دخول
 // مسؤولة المسار تؤرشف معلِّمة حلقات مسارها فقط
-const canArchiveTeacher = (t) => isAdmin() || (isSup() && S.circles.filter((c) => c.teacher_ref === t.id).every((c) => c.track_id === S.me.track_id));
+const canArchiveTeacher = (t) => isAdmin() || (isSup() && S.circles.filter((c) => c.teacher_ref === t.id).every((c) => inMyTracks(c.track_id)));
 function teacherForm(t = null) {
   const mine = t ? S.circles.filter((c) => c.teacher_ref === t.id).map((c) => c.id) : [];
   modal(`<h2>${t ? 'بيانات المعلِّمة' : 'معلِّمة جديدة'}</h2>
@@ -1172,7 +1193,7 @@ function teacherForm(t = null) {
    ========================================================= */
 PAGES.settings = async (v) => {
   const supOpts = S.profiles.filter((p) => ['teacher', 'supervisor', 'admin'].includes(p.role)).sort(byName);
-  const leadOf = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && p.track_id === tid).map((p) => p.full_name).join('، ');
+  const leadOf = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && trackIdsOf(p).includes(tid)).map((p) => p.full_name).join('، ');
   v.innerHTML = `<div class="wrap">${cartouche('المسارات والحلقات', `المسارات: ${S.tracks.length}، الحلقات: ${S.circles.length}`)}
   <div class="toolbar"><div class="end"><button class="btn ghost" id="addTrack">مسار جديد</button><button class="btn" id="addCircle">حلقة جديدة</button></div></div>
   ${S.tracks.map((t) => {
@@ -1261,7 +1282,7 @@ PAGES.tasks = async (v) => {
   const current = taskDay();
   TASK.date = TASK.date || current;
   const date = TASK.date;
-  const myTracks = (isAdmin() ? tracksOn(date) : tracksOn(date).filter((t) => t.id === S.me.track_id));
+  const myTracks = (isAdmin() ? tracksOn(date) : tracksOn(date).filter((t) => inMyTracks(t.id)));
   const circles = S.circles.filter((c) => c.active && myTracks.some((t) => t.id === c.track_id));
   const cids = circles.map((c) => c.id);
   const tasks = cids.length ? await api.list('daily_tasks', { eq: { task_date: date }, in: { circle_id: cids } }) : [];
@@ -1273,21 +1294,22 @@ PAGES.tasks = async (v) => {
 
   // ---------- مسؤولة المسار ----------
   if (isSup()) {
-    const t = S.tracks.find((x) => x.id === S.me.track_id);
-    if (!t) { v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية')}<div class="sheet empty">لم يُحدَّد مسارُكِ بعد. تواصلي مع القائدة.</div></div>`; return; }
+    const mine = S.tracks.filter((x) => inMyTracks(x.id));
+    const tname = mine.map((x) => x.name).join('، ');
+    if (!mine.length) { v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية')}<div class="sheet empty">لم يُحدَّد مسارُكِ بعد. تواصلي مع القائدة.</div></div>`; return; }
     const enrIds = activeEnrollments(cids).map((e) => e.id);
     const recs = enrIds.length ? await getRecords(date, date, enrIds) : [];
     const enrCircle = Object.fromEntries(activeEnrollments(cids).map((e) => [e.id, e.circle_id]));
     const fromEntry = (cid, kinds) => recs.filter((r) => enrCircle[r.enrollment_id] === cid && kinds.includes(r.attendance)).length;
     const done = circles.filter((c) => byCircle[c.id]).length;
     const editable = open || isAdmin();
-    v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية', `مسار ${esc(t.name)}، ${dateLine}`)}
+    v.innerHTML = `<div class="wrap">${cartouche('المهام اليومية', `${mine.length > 1 ? 'مساراتكِ' : 'مسار'} ${esc(tname)}، ${dateLine}`)}
     <div class="strip" style="grid-template-columns:repeat(2,1fr)">
       <div><div class="n ${done === circles.length && circles.length ? 'olive' : 'rose'} num">${done} / ${circles.length}</div><div class="l">حلقة أُتمَّت مهمتها</div></div>
       <div><div class="n num" style="font-size:1.15rem;padding-top:8px">${open ? left : '—'}</div><div class="l">${deadlineLine}</div></div>
     </div>
     <div class="toolbar"><label class="field">اليوم<input class="input" type="date" id="tDate" value="${date}" max="${current}"></label></div>
-    ${!circles.length ? `<div class="sheet empty">لا مهام لمسار ${esc(t.name)} في هذا اليوم (${t.entry_mode === 'weekly' ? `بطاقة أسبوعية يوم ${DAYS[t.sard_day ?? 3]}` : daysText(t.days)}).</div>` : `
+    ${!circles.length ? `<div class="sheet empty">لا مهام لـ${mine.length > 1 ? 'مساراتكِ' : 'مسار ' + esc(tname)} في هذا اليوم (${mine.map((t) => `${esc(t.name)}: ${t.entry_mode === 'weekly' ? `بطاقة أسبوعية يوم ${DAYS[t.sard_day ?? 3]}` : daysText(t.days)}`).join('، ')}).</div>` : `
     <div id="tList">${circles.map((c) => {
       const x = byCircle[c.id];
       const hint = recs.some((r) => enrCircle[r.enrollment_id] === c.id) ? `حسب إدخال المشرفة: ${fromEntry(c.id, ['present', 'late'])} حاضرة، ${fromEntry(c.id, ['absent'])} غائبة، ${fromEntry(c.id, ['excused'])} معتذرة` : 'لم تُدخل مشرفة الحلقة بيانات هذا اليوم بعد';
@@ -1323,7 +1345,7 @@ PAGES.tasks = async (v) => {
   }
 
   // ---------- القائدة: من أتمَّت ومن لم تُتم ----------
-  const leads = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && p.track_id === tid);
+  const leads = (tid) => S.profiles.filter((p) => p.role === 'supervisor' && trackIdsOf(p).includes(tid));
   const rows = myTracks.map((t) => {
     const cs = circles.filter((c) => c.track_id === t.id);
     const done = cs.filter((c) => byCircle[c.id]).length;
@@ -1476,7 +1498,7 @@ PAGES.account = async (v) => {
   <section class="sheet"><div class="profile"><span class="initial lg">${esc(initial(S.me.full_name))}</span>
     <div class="grow"><h2>${esc(S.me.full_name)}</h2><div style="color:var(--ink-3)" dir="ltr">${esc(S.me.username)}</div></div></div>
     <dl class="facts"><div><dt>الدور</dt><dd>${ROLE[role()]}</dd></div>
-      ${isSup() ? `<div><dt>المسار</dt><dd>${esc(trackName(S.me.track_id))}</dd></div>` : ''}
+      ${isSup() ? `<div><dt>${myTrackIds().length > 1 ? 'المسارات' : 'المسار'}</dt><dd>${esc(trackNames(myTrackIds()))}</dd></div>` : ''}
       ${mine.length ? `<div><dt>حلقاتي</dt><dd>${esc(mine.map((c) => c.name).join('، '))}</dd></div>` : ''}</dl></section>
   ${api.mode !== 'none' ? `<section class="sheet"><h2>تغيير كلمة المرور</h2>
     <form id="pw" style="display:grid;gap:10px;max-width:360px"><input class="input" type="password" name="p1" minlength="6" required placeholder="كلمة المرور الجديدة" dir="ltr" aria-label="كلمة المرور الجديدة"><input class="input" type="password" name="p2" minlength="6" required placeholder="أعيدي كتابتها" dir="ltr" aria-label="تأكيد كلمة المرور"><button class="btn" type="submit">تغيير كلمة المرور</button></form></section>` : ''}
