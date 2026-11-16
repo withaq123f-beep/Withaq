@@ -64,7 +64,7 @@ function daysText(days = []) {
 function isEntryDay(track, date) {
   if (!track) return false;
   const wd = new Date(date + 'T12:00:00').getDay();
-  if (track.entry_mode === 'weekly') return wd === (track.sard_day ?? (track.days || []).slice(-1)[0]);
+  if (track.entry_mode === 'weekly') return wd === (track.sard_day ?? (track.days || []).slice(-1)[0]) || (track.days || []).includes(wd);
   return (track.days || []).includes(wd);
 }
 function lastEntryDay(track, upTo) {
@@ -647,6 +647,8 @@ PAGES.entry = async (v) => {
   const wd = new Date(ENTRY.date + 'T12:00:00').getDay();
   const offDay = track && !isEntryDay(track, ENTRY.date);
   const weekly = track?.entry_mode === 'weekly';
+  // المسار الأسبوعي: حضور يومي بلا بطاقة في أيام المسار، وبطاقة السرد يوم السرد فقط
+  const attendOnly = weekly && wd !== (track.sard_day ?? 3) && (track.days || []).includes(wd);
 
   v.innerHTML = `<div class="wrap">
   ${cartouche('الإدخال من الواتساب', `${esc(circle.name)}، مسار ${esc(track?.name || '')}`)}
@@ -656,9 +658,10 @@ PAGES.entry = async (v) => {
     <label class="field${Object.keys(chipStatus).length ? ' hidden' : ''}">الحلقة<select class="input" id="eCircle">${circles.map((c) => `<option value="${c.id}"${c.id === circle.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
     <label class="field">اليوم<input class="input" type="date" id="eDate" value="${ENTRY.date}" max="${today()}"></label>
   </div>
-  ${weekly ? `<div class="banner"><span>مسار ${esc(track.name)} يرسل <b>بطاقة أسبوعية</b> يوم ${DAYS[track.sard_day ?? 3]} بعد السرد على الأهل، وحفظها يسجِّل السرد الأسبوعي تلقائيًّا.</span></div>` : ''}
-  ${offDay ? `<div class="banner warn"><span>${DAYS[wd]} ليس يوم بطاقات مسار ${esc(track.name)} (${weekly ? `بطاقة أسبوعية يوم ${DAYS[track.sard_day ?? 3]}` : daysText(track.days)}).</span></div>` : ''}
-  <section class="sheet">
+  ${weekly ? `<div class="banner"><span>مسار ${esc(track.name)} حضوره <b>يومي</b> (${daysText(track.days)}) بلا بطاقات، وتُرسل <b>بطاقة السرد</b> يوم ${DAYS[track.sard_day ?? 3]} بعد السرد على الأهل، وحفظها يسجِّل السرد الأسبوعي تلقائيًّا.</span></div>` : ''}
+  ${offDay ? `<div class="banner warn"><span>${DAYS[wd]} ليس يوم بطاقات مسار ${esc(track.name)} (${weekly ? `حضور ${daysText(track.days)}، وبطاقة السرد يوم ${DAYS[track.sard_day ?? 3]}` : daysText(track.days)}).</span></div>` : ''}
+  ${attendOnly ? attendanceSheet() : ''}
+  <section class="sheet"${attendOnly ? ' hidden' : ''}>
     <h2>بطاقات اليوم <small>${existing.length ? `سبق حفظ ${existing.length} من ${enr.length}، والحفظ الجديد يحدِّثها` : `${enr.length} طالبة في الحلقة`}</small></h2>
     <p style="color:var(--ink-2);margin-bottom:10px">انسخي بطاقات الطالبات من الواتساب كما هي، والصقيها هنا. يمكن لصق عدة بطاقات معًا.</p>
     <div class="choices" style="margin-bottom:10px">${template.map((l) => `<span class="tag gray">${esc(l)}</span>`).join('') || '<span class="tag amber">لم تُحدَّد بنود بطاقة هذا المسار</span>'}</div>
@@ -666,6 +669,29 @@ PAGES.entry = async (v) => {
     <button class="btn block" id="readCards" style="margin-top:10px">قراءة البطاقات</button>
   </section>
   <div id="review"></div></div>`;
+
+  function attendanceSheet() {
+    const byE = Object.fromEntries(existing.map((r) => [r.enrollment_id, r.attendance]));
+    return `<section class="sheet" id="attSheet"><h2>حضور اليوم <small>${enr.length} طالبة</small></h2>
+      <p style="color:var(--ink-2);margin-bottom:10px">اليوم حضور فقط، بلا بطاقات. تُحفظ فقط من تحدّدين حالتها.</p>
+      <div class="entry-meta"><span></span><button class="btn sm quiet" id="allHere" type="button">الكل حاضرات</button></div>
+      <div id="attList">${enr.map((x) => `<article class="stu" data-eid="${x.e.id}" data-att="${byE[x.e.id] || ''}"><div class="stu-head"><span class="initial">${esc(initial(x.s.full_name))}</span><b>${esc(x.s.full_name)}</b></div>
+        <div class="choices">${[['present', 'حضرت'], ['absent', 'لم تحضر'], ['excused', 'مستأذنة']].map(([k, l]) => `<button type="button" class="choice${byE[x.e.id] === k ? ' on' : ''}" data-k="${k}">${l}</button>`).join('')}</div></article>`).join('') || '<div class="empty">لا طالبات في الحلقة</div>'}</div>
+      <div class="save-dock"><button class="btn" id="saveAtt" type="button">حفظ الحضور</button></div></section>`;
+  }
+  if (attendOnly) {
+    $$('#attList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); c.dataset.att = b.dataset.k; $$('.choice', c).forEach((x) => x.classList.toggle('on', x === b)); }));
+    $('#allHere').onclick = () => $$('#attList .stu', v).forEach((c) => { c.dataset.att = 'present'; $$('.choice', c).forEach((x) => x.classList.toggle('on', x.dataset.k === 'present')); });
+    $('#saveAtt').onclick = async () => {
+      const list = $$('#attList .stu', v).filter((c) => c.dataset.att).map((c) => ({ enrollment_id: +c.dataset.eid, record_date: ENTRY.date, attendance: c.dataset.att, grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
+        memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
+        memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null }));
+      if (!list.length) { toast('حدِّدي حالة طالبة واحدة على الأقل', 'bad'); return; }
+      const btn = $('#saveAtt'); btn.disabled = true;
+      try { await api.upsert('daily_records', list, 'enrollment_id,record_date'); toast(`حُفظ حضور ${list.length} طالبة 🌸`, 'ok'); route(); }
+      catch (err) { toast(translateError(err.message), 'bad'); btn.disabled = false; }
+    };
+  }
 
   $('#eCircle').onchange = (e) => { ENTRY.circleId = +e.target.value; ENTRY.text = ''; ENTRY.dateTouched = false; route(); };
   $$('.cchip', v).forEach((b) => (b.onclick = () => { if (+b.dataset.cid === ENTRY.circleId) return; ENTRY.circleId = +b.dataset.cid; ENTRY.text = ''; route(); }));
@@ -1334,7 +1360,7 @@ PAGES.tasks = async (v) => {
       <div><div class="n num" style="font-size:1.15rem;padding-top:8px">${open ? left : '—'}</div><div class="l">${deadlineLine}</div></div>
     </div>
     <div class="toolbar"><label class="field">اليوم<input class="input" type="date" id="tDate" value="${date}" max="${current}"></label></div>
-    ${!circles.length ? `<div class="sheet empty">لا مهام لـ${mine.length > 1 ? 'مساراتكِ' : 'مسار ' + esc(tname)} في هذا اليوم (${mine.map((t) => `${esc(t.name)}: ${t.entry_mode === 'weekly' ? `بطاقة أسبوعية يوم ${DAYS[t.sard_day ?? 3]}` : daysText(t.days)}`).join('، ')}).</div>` : `
+    ${!circles.length ? `<div class="sheet empty">لا مهام لـ${mine.length > 1 ? 'مساراتكِ' : 'مسار ' + esc(tname)} في هذا اليوم (${mine.map((t) => `${esc(t.name)}: ${t.entry_mode === 'weekly' ? `حضور ${daysText(t.days)} + بطاقة السرد يوم ${DAYS[t.sard_day ?? 3]}` : daysText(t.days)}`).join('، ')}).</div>` : `
     <div id="tList">${circles.map((c) => {
       const x = byCircle[c.id];
       const hint = recs.some((r) => enrCircle[r.enrollment_id] === c.id) ? `حسب إدخال المشرفة: ${fromEntry(c.id, ['present', 'late'])} حاضرة، ${fromEntry(c.id, ['absent'])} غائبة، ${fromEntry(c.id, ['excused'])} معتذرة` : 'لم تُدخل مشرفة الحلقة بيانات هذا اليوم بعد';
