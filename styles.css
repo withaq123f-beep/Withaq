@@ -412,3 +412,8 @@ textarea.cards-box { min-height: 220px; font-size: .92rem; line-height: 1.8; }
 .cchip.on { border-color: var(--rose-deep); background: var(--rose-wash); box-shadow: inset 0 0 0 1px var(--rose-deep); }
 
 .choice.taken { opacity: .5; cursor: not-allowed; }
+
+/* لوحة بخمس خانات (تتضمن المستأذنات) */
+@media (min-width: 700px) { .strip5 { grid-template-columns: repeat(5, 1fr); } }
+.strip5 > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 700px) { .strip5 > div:last-child:nth-child(odd) { grid-column: auto; } }

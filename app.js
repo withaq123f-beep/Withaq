@@ -579,10 +579,11 @@ PAGES.home = async (v) => {
       <div class="lbl">وجهًا حفظته الطالبات هذا الشهر</div><div class="harvest-juz">تعادل ${juz.toFixed(1)} جزءًا</div></div></div>
   </section>
   ${banner}
-  <div class="strip">
+  <div class="strip strip5">
     <div><div class="n rose num">${studentCount}</div><div class="l">طالبة في الحلقات</div></div>
     <div><div class="n olive num">${todayRecs.filter(came).length}</div><div class="l">حضرن اليوم</div></div>
     <div><div class="n red num">${todayRecs.filter((r) => r.attendance === 'absent').length}</div><div class="l">غبن اليوم</div></div>
+    <div><div class="n num" style="color:var(--blue,#3b6fa5)">${todayRecs.filter((r) => r.attendance === 'excused').length}</div><div class="l">استأذنّ اليوم</div></div>
     <div><div class="n num" style="color:var(--amber)">${shortToday}</div><div class="l">قصَّرن اليوم</div></div>
   </div>
   <div class="split">
