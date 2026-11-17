@@ -705,6 +705,10 @@ PAGES.entry = async (v) => {
   const weekly = track?.entry_mode === 'weekly';
   // المسار الأسبوعي: حضور يومي بلا بطاقة في أيام المسار، وبطاقة السرد يوم السرد فقط
   const attendOnly = weekly && wd !== (track.sard_day ?? 3) && (track.days || []).includes(wd);
+  // بطاقة الأنصبة الأسبوعية تلصقها مسؤولة المسار (والقائدة) فقط، ويمكنها إدخالها قبل يوم السرد بيوم أو يومين باختيار تاريخ يوم السرد
+  const cardLocked = weekly && wd === (track.sard_day ?? 3) && !(isAdmin() || isSup());
+  const canCardWeekly = weekly && (isAdmin() || isSup());
+  const maxDate = (() => { if (!canCardWeekly) return today(); let d = today(); for (let i = 0; i <= 2; i++) { if (new Date(d + 'T12:00:00').getDay() === (track.sard_day ?? 3)) return d; d = addDays(d, 1); } return today(); })();
 
   v.innerHTML = `<div class="wrap">
   ${cartouche('الإدخال من الواتساب', `${esc(circle.name)}، مسار ${esc(track?.name || '')}`)}
@@ -712,19 +716,21 @@ PAGES.entry = async (v) => {
       return `<button class="cchip${c.id === circle.id ? ' on' : ''}" data-cid="${c.id}" role="tab" aria-selected="${c.id === circle.id}"><b>${esc(c.name)}</b><small class="${full ? 'ok' : st.done ? 'part' : ''}">${!st.total ? 'لا طالبات' : full ? 'اكتمل' : `${st.done} من ${st.total}`}</small></button>`; }).join('')}</div>` : ''}
   <div class="entry-head"${Object.keys(chipStatus).length ? ' style="grid-template-columns:1fr"' : ''}>
     <label class="field${Object.keys(chipStatus).length ? ' hidden' : ''}">الحلقة<select class="input" id="eCircle">${circles.map((c) => `<option value="${c.id}"${c.id === circle.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
-    <label class="field">اليوم<input class="input" type="date" id="eDate" value="${ENTRY.date}" max="${today()}"></label>
+    <label class="field">اليوم<input class="input" type="date" id="eDate" value="${ENTRY.date}" max="${maxDate}"></label>
   </div>
   ${weekly ? `<div class="banner"><span>مسار ${esc(track.name)} حضوره <b>يومي</b> (${daysText(track.days)}) بلا بطاقات، وتُرسل <b>بطاقة السرد</b> يوم ${DAYS[track.sard_day ?? 3]} بعد السرد على الأهل، وحفظها يسجِّل السرد الأسبوعي تلقائيًّا.</span></div>` : ''}
   ${offDay ? `<div class="banner warn"><span>${DAYS[wd]} ليس يوم بطاقات مسار ${esc(track.name)} (${weekly ? `حضور ${daysText(track.days)}، وبطاقة السرد يوم ${DAYS[track.sard_day ?? 3]}` : daysText(track.days)}).</span></div>` : ''}
+  ${cardLocked ? `<div class="banner"><span>بطاقة الأنصبة لمسار ${esc(track.name)} تُدخلها <b>مسؤولة المسار</b>، وحضورك يكون في أيام الحضور (${esc(daysText(track.days))}).</span></div>` : ''}
+  ${attendOnly && canCardWeekly ? `<div class="banner"><span>لإدخال <b>بطاقة الأنصبة</b> اختاري من حقل «اليوم» يوم السرد (${DAYS[track.sard_day ?? 3]}).</span></div>` : ''}
   ${attendOnly ? attendanceSheet() : ''}
-  <section class="sheet"${attendOnly ? ' hidden' : ''}>
+  <section class="sheet"${attendOnly || cardLocked ? ' hidden' : ''}>
     <h2>بطاقات اليوم <small>${existing.length ? `سبق حفظ ${existing.length} من ${enr.length}، والحفظ الجديد يحدِّثها` : `${enr.length} طالبة في الحلقة`}</small></h2>
     <p style="color:var(--ink-2);margin-bottom:10px">انسخي بطاقات الطالبات من الواتساب كما هي، والصقيها هنا. يمكن لصق عدة بطاقات معًا.</p>
     <div class="choices" style="margin-bottom:10px">${template.map((l) => `<span class="tag gray">${esc(l)}</span>`).join('') || '<span class="tag amber">لم تُحدَّد بنود بطاقة هذا المسار</span>'}</div>
     <textarea class="input cards-box" id="cardsText" placeholder="بطاقة الحضور&#10;الاسم : …&#10;اليوم : …">${esc(ENTRY.text)}</textarea>
     <button class="btn block" id="readCards" style="margin-top:10px">قراءة البطاقات</button>
   </section>
-  ${attendOnly ? '' : savedSheet()}
+  ${attendOnly || cardLocked ? '' : savedSheet()}
   <div id="review"></div></div>`;
 
   // المحفوظ لهذا اليوم: تعديل الحالة وبنود البطاقة لمن سبق تسجيلها، ثم حفظ ما عُدِّل دفعة واحدة
