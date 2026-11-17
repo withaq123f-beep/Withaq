@@ -774,26 +774,54 @@ PAGES.entry = async (v) => {
 
     $('#review').innerHTML = `
     <section class="sheet" style="margin-top:16px"><h2>البطاقات المقروءة <small>${parsed.length}</small></h2>
+      <p class="hint-line" id="sumLine" style="margin-bottom:10px"></p><p style="color:var(--ink-2);margin-bottom:10px;font-size:.88rem">راجعي كل بطاقة، وعدِّلي أي بند أو الحالة أو الطالبة، ثم اضغطي «حفظ الإدخال» ليُحفظ الجميع معًا.</p>
       ${parsed.map((p, i) => {
         const opts = (p.m.kind === 'ambiguous' ? p.m.candidates : refs);
         const sel = p.m.kind === 'matched' ? p.m.student.id : '';
         const dayBad = p.card.day != null && p.card.day !== wd;
         return `<article class="stu card-review ${p.ev.missing.length ? 'short' : 'marked'}" data-i="${i}">
           <div class="stu-head" style="flex-wrap:wrap"><b>${esc(p.card.name || p.card.sender || 'بلا اسم')}</b>
-            ${p.excused ? '<span class="tag amber">معتذرة</span>' : p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}
+            <span class="evwrap">${p.excused ? '<span class="tag amber">معتذرة</span>' : p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}</span>
             ${dayBad ? `<span class="tag amber">البطاقة ليوم ${DAYS[p.card.day]}</span>` : ''}
             ${p.m.kind === 'matched' && counts[p.m.student.id] > 1 ? '<span class="tag amber">مكرَّرة، تُعتمد الأخيرة</span>' : ''}</div>
           <label class="field">الحالة<select class="input sm att" aria-label="الحالة"><option value="present"${p.excused ? '' : ' selected'}>حضرت</option><option value="excused"${p.excused ? ' selected' : ''}>مستأذنة / معتذرة</option></select></label>
           <label class="field">الطالبة<select class="input sm pick" aria-label="الطالبة">
             <option value="">${p.m.kind === 'ambiguous' ? 'أكثر من طالبة بهذا الاسم، اختاري' : p.m.kind === 'none' ? 'لم أجد الاسم في الحلقة، اختاري' : ''}</option>
             ${opts.map((o) => `<option value="${o.id}"${o.id === sel ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
-          <div class="card-items">${p.ev.rows.map((r) => `<div class="ci ${r.ok ? '' : 'bad'}"><span>${esc(r.label)}</span><b>${r.value ? esc(r.value) : (r.present ? 'فارغ' : 'غير موجود')}</b></div>`).join('')}</div>
-          ${(p.memo && amountText(p.memo)) || (p.review && amountText(p.review)) ? `<p class="hint-line">${p.memo && amountText(p.memo) ? `الحفظ: ${esc(amountText(p.memo))}` : ''}${p.memo && amountText(p.memo) && p.review && amountText(p.review) ? '، ' : ''}${p.review && amountText(p.review) ? `المراجعة: ${esc(amountText(p.review))}` : ''}</p>` : ''}
+          <div class="card-items">${p.ev.rows.map((r, j) => `<div class="ci ${r.ok ? '' : 'bad'}"><span>${esc(r.label)}</span><input class="input sm ci-in" data-j="${j}" value="${esc(r.value)}" placeholder="${r.present ? 'فارغ' : 'غير موجود'}" aria-label="${esc(r.label)}"${r.extra ? ' data-extra="1"' : ''}></div>`).join('')}</div>
+          <p class="hint-line" data-hint></p>
         </article>`;
       }).join('')}
     </section>
     <section class="sheet" id="noCard"><h2>لم تُرسل بطاقة <small id="noCardCount"></small></h2><div id="noCardList"></div></section>
     <div class="save-dock"><button class="btn" id="saveCards">حفظ الإدخال</button></div>`;
+
+    // قراءة القيم الحالية من خانات البطاقة (بعد تعديل المشرفة) وإعادة التقييم
+    const live = (el) => {
+      const p = parsed[+el.dataset.i];
+      const rows = p.ev.rows.map((r, j) => { const inp = el.querySelector(`.ci-in[data-j="${j}"]`); const value = inp ? inp.value.trim() : r.value; return { ...r, value, ok: r.extra ? true : (!!CardKit.norm(value) && !CardKit.isNegative(value)) }; });
+      const missing = rows.filter((r) => !r.ok).map((r) => r.label);
+      const sur = rows.find((r) => r.key === 'surah')?.value || '';
+      const amtOf = (k) => { const it = rows.find((r) => r.key === k && r.value); return it ? CardKit.readAmount(it.value, it.label, k === 'memo' ? sur : '', SURAH_INFO) : null; };
+      return { rows, missing, memo: amtOf('memo'), review: amtOf('review') };
+    };
+    const sum = () => {
+      const els = $$('.card-review', v); let ok = 0; let sh = 0; let ex = 0;
+      els.forEach((el) => { if (el.querySelector('.att')?.value === 'excused') ex++; else if (live(el).missing.length) sh++; else ok++; });
+      const rest = +($('#noCardCount')?.textContent || 0);
+      $('#sumLine').innerHTML = `قرأتُ <b>${els.length}</b> بطاقة: ${ok} مكتملة، ${sh} فيها تقصير${ex ? `، ${ex} معتذرة` : ''}. ${rest ? `<b style="color:var(--red)">${rest} طالبة بلا بطاقة</b> (تُسجَّل غائبة ما لم تغيّري حالتها بالأسفل)` : 'وصلت بطاقات كل الطالبات'}.`;
+    };
+    const paint = (el) => {
+      const L = live(el); const exc = el.querySelector('.att')?.value === 'excused';
+      el.querySelector('.evwrap').innerHTML = exc ? '<span class="tag amber">معتذرة</span>' : L.missing.length ? `<span class="tag red">تقصير: ${L.missing.length}</span>` : '<span class="tag olive">مكتملة</span>';
+      el.classList.toggle('short', !exc && L.missing.length > 0); el.classList.toggle('marked', exc || !L.missing.length);
+      $$('.ci', el).forEach((c, j) => c.classList.toggle('bad', !L.rows[j].ok));
+      const parts = [];
+      if (L.memo && amountText(L.memo)) parts.push(`الحفظ: ${amountText(L.memo)}`);
+      if (L.review && amountText(L.review)) parts.push(`المراجعة: ${amountText(L.review)}`);
+      el.querySelector('[data-hint]').textContent = parts.join('، ');
+      sum();
+    };
 
     const drawNoCard = () => {
       const picked = new Set($$('.card-review .pick', v).map((s) => +s.value).filter(Boolean));
@@ -809,10 +837,13 @@ PAGES.entry = async (v) => {
         return `<article class="stu" data-eid="${x.e.id}" data-att="${att}"><div class="stu-head"><span class="initial">${esc(initial(x.s.full_name))}</span><b>${esc(x.s.full_name)}</b></div>
         <div class="choices">${opts.map(([k, l]) => `<button type="button" class="choice${att === k ? ' on' : ''}" data-v="${k || 'none'}" data-k="${k}">${l}</button>`).join('')}</div></article>`;
       }).join('') || '<div class="empty">وصلت بطاقات كل الطالبات 🌸</div>';
+      if ($('#sumLine')) sum();
       $$('#noCardList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); c.dataset.att = b.dataset.k; $$('.choice', c).forEach((x) => x.classList.toggle('on', x === b)); }));
     };
     drawNoCard();
-    $$('.card-review .pick', v).forEach((s) => (s.onchange = drawNoCard));
+    $$('.card-review', v).forEach((el) => { paint(el); el.addEventListener('input', () => paint(el)); el.querySelector('.att')?.addEventListener('change', () => paint(el)); });
+    sum();
+    $$('.card-review .pick', v).forEach((s) => (s.onchange = () => { drawNoCard(); sum(); }));
     $('#review').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     $('#saveCards').onclick = async () => {
@@ -824,11 +855,12 @@ PAGES.entry = async (v) => {
         if (exc) { rows.set(eid, { enrollment_id: eid, record_date: ENTRY.date, attendance: 'excused', grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
           memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
           memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null }); return; }
+        const L = live(el);
         const row = { enrollment_id: eid, record_date: ENTRY.date, attendance: 'present', grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
           memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
           memo_pages: null, review_pages: null,
-          card: p.ev.rows.map((r) => ({ label: r.label, value: r.value, ok: r.ok })), shortcoming: p.ev.missing.length > 0, shortcoming_items: p.ev.missing };
-        for (const [k, a] of [['memo', p.memo], ['review', p.review]]) {
+          card: L.rows.map((r) => ({ label: r.label, value: r.value, ok: r.ok })), shortcoming: L.missing.length > 0, shortcoming_items: L.missing };
+        for (const [k, a] of [['memo', L.memo], ['review', L.review]]) {
           if (!a) continue;
           if (a.range) {
             const fs = surahNo(a.range.surahStart); const ts = surahNo(a.range.surahEnd);
