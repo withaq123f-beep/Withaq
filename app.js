@@ -955,10 +955,32 @@ PAGES.student = async (v, arg) => {
       ${!r.memo_to_surah && r.memo_pages ? `<div class="s">حفظ: ${fmtPages(+r.memo_pages)}</div>` : ''}
       ${!r.review_to_surah && r.review_pages ? `<div class="s">مراجعة: ${fmtPages(+r.review_pages)}</div>` : ''}
       ${r.shortcoming && r.shortcoming_items?.length ? `<div class="s" style="color:var(--amber)">أخلَّت بـ: ${esc(r.shortcoming_items.join('، '))}</div>` : ''}
-      ${r.note ? `<div class="s">ملاحظة: ${esc(r.note)}</div>` : ''}</div></div>`).join('') || '<div class="empty">لا سجل بعد</div>'}
+      ${r.note ? `<div class="s">ملاحظة: ${esc(r.note)}</div>` : ''}</div>${!isStu() ? `<button class="btn sm quiet" data-rec="${r.id}">تعديل</button>` : ''}</div>`).join('') || '<div class="empty">لا سجل بعد</div>'}
   </div></section></div>`;
 
   const ed = $('#editStu'); if (ed) ed.onclick = () => studentForm(s);
+  // تعديل سجل يوم أو حذفه (لمن لها صلاحية الحلقة: المشرفة ومسؤولة المسار والقائدة)
+  $$('[data-rec]', v).forEach((b) => (b.onclick = () => {
+    const r = recs.find((x) => x.id === +b.dataset.rec); if (!r) return;
+    modal(`<h2>سجل ${esc(fmtShort(r.record_date))}</h2>
+      <label class="field">الحضور<select class="input" id="rAtt">${Object.entries(ATT).map(([k, l]) => `<option value="${k}"${r.attendance === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field"><span>تقصير</span><select class="input" id="rShort"><option value="0"${!r.shortcoming ? ' selected' : ''}>بلا تقصير</option><option value="1"${r.shortcoming ? ' selected' : ''}>تقصير</option></select></label>
+      <label class="field">ملاحظة<input class="input" id="rNote" value="${esc(r.note || '')}"></label>
+      <div class="actions"><button class="btn" id="rSave">حفظ</button><button class="btn danger" id="rDel">حذف السجل</button><button class="btn ghost" data-close>إلغاء</button></div>`,
+    (m, close) => {
+      m.querySelector('#rSave').onclick = async () => {
+        try {
+          const sh = m.querySelector('#rShort').value === '1';
+          await api.update('daily_records', r.id, { attendance: m.querySelector('#rAtt').value, shortcoming: sh, shortcoming_items: sh ? r.shortcoming_items : null, note: m.querySelector('#rNote').value.trim() || null, entered_by: S.me.id, updated_at: new Date().toISOString() });
+          close(); toast('تم التعديل 🌸', 'ok'); route();
+        } catch (err) { toast(translateError(err.message), 'bad'); }
+      };
+      m.querySelector('#rDel').onclick = async () => {
+        if (!(await confirmBox('حذف سجل هذا اليوم؟ يصير اليوم بلا تسجيل، ويمكنكِ إعادة إدخاله من الإدخال.', 'حذف'))) return;
+        try { await api.remove('daily_records', r.id); close(); toast('حُذف السجل', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); }
+      };
+    });
+  }));
   const ar = $('#arcStu'); if (ar) ar.onclick = async () => {
     try {
       if (s.active) {
