@@ -508,15 +508,27 @@ async function route() {
 /* =========================================================
    الرئيسية
    ========================================================= */
+const HOMEF = { mode: 'today', from: '', to: '' };
 PAGES.home = async (v) => {
   if (isStu()) return PAGES.student(v, S.me.student_id);
-  const t = today(); const from = addDays(t, -29); const from14 = addDays(t, -13); const from7 = addDays(t, -6);
+  const t = today(); const from0 = addDays(t, -29);
+  // فترة الإحصائيات: اليوم، أمس، يوم محدد، أو فترة
+  let rFrom = t; let rTo = t; let period = 'اليوم';
+  if (HOMEF.mode === 'yesterday') { rFrom = rTo = addDays(t, -1); period = 'أمس'; }
+  else if (HOMEF.mode === 'day') { rFrom = rTo = (HOMEF.from && HOMEF.from <= t) ? HOMEF.from : t; period = rFrom === t ? 'اليوم' : fmtShort(rFrom); }
+  else if (HOMEF.mode === 'range') {
+    rFrom = HOMEF.from || addDays(t, -6); rTo = HOMEF.to || t; if (rFrom > rTo) [rFrom, rTo] = [rTo, rFrom]; if (rTo > t) rTo = t;
+    period = `من ${fmtShort(rFrom)} إلى ${fmtShort(rTo)}`;
+  }
+  const single = rFrom === rTo;
+  const from = rFrom < from0 ? rFrom : from0; const from14 = addDays(t, -13); const from7 = addDays(t, -6);
   const circles = myCircles();
   const enr = activeEnrollments(circles.map((c) => c.id));
   const enrById = Object.fromEntries(enr.map((e) => [e.id, e]));
   const recs = (await getRecords(from, t)).filter((r) => enrById[r.enrollment_id]);
   const r14 = recs.filter((r) => r.record_date >= from14);
   const todayRecs = recs.filter((r) => r.record_date === t);
+  const rr = recs.filter((r) => r.record_date >= rFrom && r.record_date <= rTo);
   const came = (r) => r.attendance === 'present' || r.attendance === 'late';
   const studentCount = new Set(enr.map((e) => e.student_id)).size;
   const monthPages = recs.filter((r) => r.record_date >= monthStart()).reduce((n, r) => n + memoPages(r), 0);
@@ -570,6 +582,38 @@ PAGES.home = async (v) => {
     if (lim) banner += `<a class="banner warn" href="#/sard" style="background:var(--red-wash);border-color:#eec2bf"><span><b>السرد الأسبوعي:</b> ${lim} ${lim === 1 ? 'طالبة وصلت' : lim === 2 ? 'طالبتان وصلتا' : 'طالبات وصلن'} حدَّ الحذف</span><span class="s">عرض</span></a>`;
     else if (so.missingCircles.length) banner += `<a class="banner warn" href="#/sard"><span><b>السرد الأسبوعي:</b> لم يُسجَّل لـ${so.missingCircles.length} حلقة</span><span class="s">تسجيل</span></a>`;
   }
+  // إحصائيات الفترة: الحفظ والمراجعة، والأعمار، والجنسيات، والمتطوعات
+  function statsHtml() {
+    const memoP = rr.reduce((n, r) => n + memoPages(r), 0); const revP = rr.reduce((n, r) => n + reviewPages(r), 0);
+    const f1 = (x) => (Math.round(x * 10) / 10).toLocaleString('en');
+    const stus = [...new Set(enr.map((e) => e.student_id))].map(studentById).filter((x) => x && x.active);
+    const recorded = new Set(rr.map((r) => enrById[r.enrollment_id].student_id)).size;
+    const ages = stus.map((x) => +x.age).filter((n) => n > 0);
+    const buckets = [['أقل من ١٠', (n) => n < 10], ['١٠–١٤', (n) => n >= 10 && n <= 14], ['١٥–١٩', (n) => n >= 15 && n <= 19], ['٢٠–٢٩', (n) => n >= 20 && n <= 29], ['٣٠–٣٩', (n) => n >= 30 && n <= 39], ['٤٠ فأكثر', (n) => n >= 40]];
+    const noAge = stus.length - ages.length;
+    const nat = {}; stus.forEach((x) => { const k = (x.nationality || '').trim() || 'غير محددة'; nat[k] = (nat[k] || 0) + 1; });
+    const natRows = Object.entries(nat).sort((a, b) => b[1] - a[1]);
+    // المتطوعات: مشرفات الحلقات (حسابات) ومعلِّمات الحلقات (سجلات)، دون تكرار
+    const cIds = new Set(circles.map((c) => c.id)); const scs = S.circles.filter((c) => cIds.has(c.id));
+    const sup = new Set(scs.map((c) => c.teacher_id).filter(Boolean)); const ins = new Set(scs.map((c) => c.teacher_ref).filter(Boolean));
+    const bar = (n, max) => `<i style="display:block;height:6px;border-radius:3px;background:var(--rose);width:${max ? Math.max(4, Math.round((n / max) * 100)) : 0}%"></i>`;
+    const bmax = Math.max(1, ...buckets.map(([, f]) => ages.filter(f).length)); const nmax = Math.max(1, ...natRows.map((x) => x[1]));
+    return `<section class="sheet" style="margin-bottom:16px"><h2>إحصائيات ${single ? period : 'الفترة'} <small>${single ? '' : `${fmtShort(rFrom)} – ${fmtShort(rTo)}`}</small></h2>
+      <div class="strip strip5" style="margin-bottom:14px">
+        <div><div class="n rose num">${f1(memoP)}</div><div class="l">وجهًا حفظًا</div></div>
+        <div><div class="n olive num">${f1(revP)}</div><div class="l">وجهًا مراجعة</div></div>
+        <div><div class="n num">${stus.length}</div><div class="l">طالبة نشطة</div></div>
+        <div><div class="n num">${recorded}</div><div class="l">طالبة سُجِّل لها</div></div>
+        <div><div class="n num">${sup.size + ins.size}</div><div class="l">متطوعة</div><div class="s" style="font-size:.78rem;color:var(--ink-3)">${sup.size} مشرفة، ${ins.size} معلِّمة</div></div>
+      </div>
+      <div class="split"><div><h3 style="margin-bottom:8px">الأعمار ${ages.length ? `<small>المتوسط ${f1(ages.reduce((a, b) => a + b, 0) / ages.length)} سنة</small>` : ''}</h3>
+        ${buckets.map(([l, f]) => { const n = ages.filter(f).length; return `<div style="display:grid;grid-template-columns:90px 1fr 30px;gap:8px;align-items:center;margin-bottom:6px"><span>${l}</span>${bar(n, bmax)}<b class="num">${n}</b></div>`; }).join('')}
+        ${noAge ? `<p class="s" style="color:var(--ink-3)">${noAge} بلا عمر مسجَّل</p>` : ''}</div>
+        <div><h3 style="margin-bottom:8px">الجنسيات <small>${natRows.length}</small></h3>
+        ${natRows.slice(0, 12).map(([l, n]) => `<div style="display:grid;grid-template-columns:110px 1fr 30px;gap:8px;align-items:center;margin-bottom:6px"><span>${esc(l)}</span>${bar(n, nmax)}<b class="num">${n}</b></div>`).join('') || '<div class="empty">لا بيانات</div>'}
+        ${natRows.length > 12 ? `<p class="s" style="color:var(--ink-3)">و${natRows.length - 12} جنسيات أخرى</p>` : ''}</div></div></section>`;
+  }
+
   v.innerHTML = `<div class="wrap">
   <section class="greet">
     <div><h1>أهلًا بكِ يا ${esc(firstName(S.me.full_name))} 🌸</h1>
@@ -579,13 +623,19 @@ PAGES.home = async (v) => {
       <div class="lbl">وجهًا حفظته الطالبات هذا الشهر</div><div class="harvest-juz">تعادل ${juz.toFixed(1)} جزءًا</div></div></div>
   </section>
   ${banner}
+  <div class="rangebar" role="group" aria-label="فترة الإحصائيات">
+    ${[['today', 'اليوم'], ['yesterday', 'أمس'], ['day', 'يوم محدد'], ['range', 'فترة']].map(([k, l]) => `<button type="button" class="cchip${HOMEF.mode === k ? ' on' : ''}" data-rm="${k}"><b>${l}</b></button>`).join('')}
+    ${HOMEF.mode === 'day' ? `<input class="input sm" type="date" id="hDay" value="${rFrom}" max="${t}" aria-label="اليوم">` : ''}
+    ${HOMEF.mode === 'range' ? `<input class="input sm" type="date" id="hFrom" value="${rFrom}" max="${t}" aria-label="من"><span>إلى</span><input class="input sm" type="date" id="hTo" value="${rTo}" max="${t}" aria-label="إلى">` : ''}
+  </div>
   <div class="strip strip5">
     <div><div class="n rose num">${studentCount}</div><div class="l">طالبة في الحلقات</div></div>
-    <div><div class="n olive num">${todayRecs.filter(came).length}</div><div class="l">حضرن اليوم</div></div>
-    <div><div class="n red num">${todayRecs.filter((r) => r.attendance === 'absent').length}</div><div class="l">غبن اليوم</div></div>
-    <div><div class="n num" style="color:var(--blue,#3b6fa5)">${todayRecs.filter((r) => r.attendance === 'excused').length}</div><div class="l">استأذنّ اليوم</div></div>
-    <div><div class="n num" style="color:var(--amber)">${shortToday}</div><div class="l">قصَّرن اليوم</div></div>
+    <div><div class="n olive num">${rr.filter(came).length}</div><div class="l">حضرن ${single ? period : 'في الفترة'}</div></div>
+    <div><div class="n red num">${rr.filter((r) => r.attendance === 'absent').length}</div><div class="l">غبن ${single ? period : 'في الفترة'}</div></div>
+    <div><div class="n num" style="color:var(--blue,#3b6fa5)">${rr.filter((r) => r.attendance === 'excused').length}</div><div class="l">استأذنّ ${single ? period : 'في الفترة'}</div></div>
+    <div><div class="n num" style="color:var(--amber)">${rr.filter((r) => r.shortcoming).length}</div><div class="l">قصَّرن ${single ? period : 'في الفترة'}</div></div>
   </div>
+  ${statsHtml()}
   <div class="split">
     <section class="sheet"><h2>إدخال اليوم <small>الحضور في أسبوعين</small></h2><div class="lines">
       ${shownRows.map(({ c, rate, st }) => `<a class="line" href="${canEnter() ? '#/entry' : '#/reports'}" data-circle="${c.id}">
@@ -612,6 +662,10 @@ PAGES.home = async (v) => {
       <span class="tag olive">${fmtPages(n)}</span></a>`).join('') || '<div class="empty">لم يُسجَّل حفظ هذا الأسبوع بعد</div>'}
   </div></section></div></div>`;
   $$('[data-circle]', v).forEach((a) => a.addEventListener('click', () => { ENTRY.circleId = +a.dataset.circle; ENTRY.date = today(); }));
+  $$('[data-rm]', v).forEach((b) => (b.onclick = () => { HOMEF.mode = b.dataset.rm; if (HOMEF.mode === 'day' && !HOMEF.from) HOMEF.from = t; if (HOMEF.mode === 'range') { HOMEF.from = HOMEF.from || addDays(t, -6); HOMEF.to = HOMEF.to || t; } route(); }));
+  const hd = $('#hDay'); if (hd) hd.onchange = (e) => { if (e.target.value) { HOMEF.from = e.target.value; route(); } };
+  const hf = $('#hFrom'); if (hf) hf.onchange = (e) => { if (e.target.value) { HOMEF.from = e.target.value; route(); } };
+  const ht = $('#hTo'); if (ht) ht.onchange = (e) => { if (e.target.value) { HOMEF.to = e.target.value; route(); } };
 };
 
 /* =========================================================
