@@ -724,7 +724,63 @@ PAGES.entry = async (v) => {
     <textarea class="input cards-box" id="cardsText" placeholder="بطاقة الحضور&#10;الاسم : …&#10;اليوم : …">${esc(ENTRY.text)}</textarea>
     <button class="btn block" id="readCards" style="margin-top:10px">قراءة البطاقات</button>
   </section>
+  ${attendOnly ? '' : savedSheet()}
   <div id="review"></div></div>`;
+
+  // المحفوظ لهذا اليوم: تعديل الحالة وبنود البطاقة لمن سبق تسجيلها، ثم حفظ ما عُدِّل دفعة واحدة
+  function savedItems(r) {
+    const skip = (l) => /بطاقه\s*الحضور/.test(CardKit.norm(l)) || ['name', 'day'].includes(CardKit.itemKey(l));
+    const src = Array.isArray(r.card) && r.card.length ? r.card.map((c) => ({ label: c.label, value: c.value })) : template.map((label) => ({ label, value: '' }));
+    return src.filter((c) => !skip(c.label)).map((c) => ({ label: c.label, key: CardKit.itemKey(c.label), value: c.value || '' }));
+  }
+  function savedSheet() {
+    const byE = Object.fromEntries(existing.map((r) => [r.enrollment_id, r]));
+    const list = enr.filter((x) => byE[x.e.id]);
+    if (!list.length) return '';
+    return `<details class="sheet" id="savedSheet" style="margin-top:16px"><summary style="cursor:pointer"><b>المحفوظ لهذا اليوم</b> <small>${list.length} طالبة، عدِّلي حالة أو بطاقة ثم احفظي التعديلات</small></summary>
+      <div id="savedList" style="margin-top:10px">${list.map((x) => { const r = byE[x.e.id]; const items = savedItems(r);
+        return `<article class="stu card-review" data-eid="${x.e.id}"><div class="stu-head"><span class="initial">${esc(initial(x.s.full_name))}</span><b>${esc(x.s.full_name)}</b></div>
+          <label class="field">الحالة<select class="input sm sv-att" aria-label="الحالة">${Object.entries(ATT).map(([k, l]) => `<option value="${k}"${r.attendance === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+          <div class="card-items">${items.map((it, j) => `<div class="ci"><span>${esc(it.label)}</span><input class="input sm ci-in sv-in" data-j="${j}" data-key="${esc(it.key)}" data-label="${esc(it.label)}" value="${esc(it.value)}" aria-label="${esc(it.label)}"></div>`).join('')}</div></article>`; }).join('')}</div>
+      <div class="save-dock"><button class="btn" id="saveSaved" type="button">حفظ التعديلات</button></div></details>`;
+  }
+  const savedEl = $('#savedList');
+  if (savedEl) {
+    $$('.card-review', savedEl).forEach((el) => { const mark = () => { el.dataset.dirty = '1'; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
+    $('#saveSaved').onclick = async () => {
+      const rows = [];
+      $$('.card-review', savedEl).forEach((el) => {
+        if (!el.dataset.dirty) return;
+        const att = el.querySelector('.sv-att').value;
+        const base = { enrollment_id: +el.dataset.eid, record_date: ENTRY.date, attendance: att, grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
+          memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
+          memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null };
+        if (att === 'present' || att === 'late') {
+          const items = $$('.sv-in', el).map((i) => { const value = i.value.trim(); return { key: i.dataset.key, label: i.dataset.label, value, ok: !!CardKit.norm(value) && !CardKit.isNegative(value) }; });
+          const missing = items.filter((i) => !i.ok).map((i) => i.label);
+          Object.assign(base, { card: items.map((i) => ({ label: i.label, value: i.value, ok: i.ok })), shortcoming: missing.length > 0, shortcoming_items: missing.length ? missing : null });
+          const sur = items.find((i) => i.key === 'surah')?.value || '';
+          for (const k of ['memo', 'review']) {
+            const it = items.find((i) => i.key === k && i.value); if (!it) continue;
+            const a = CardKit.readAmount(it.value, it.label, k === 'memo' ? sur : '', SURAH_INFO);
+            if (a.range) { const fs = surahNo(a.range.surahStart); const ts = surahNo(a.range.surahEnd); if (fs && ts) Object.assign(base, { [`${k}_from_surah`]: fs, [`${k}_from_ayah`]: a.range.ayahStart, [`${k}_to_surah`]: ts, [`${k}_to_ayah`]: a.range.ayahEnd, [`${k}_pages`]: Math.round(pagesOfRange(fs, a.range.ayahStart, ts, a.range.ayahEnd) * 100) / 100 }); }
+            else if (a.pages != null) base[`${k}_pages`] = Math.round(a.pages * 100) / 100;
+          }
+        }
+        rows.push(base);
+      });
+      if (!rows.length) { toast('لم تعدِّلي شيئًا بعد', 'bad'); return; }
+      const btn = $('#saveSaved'); btn.disabled = true;
+      try {
+        await api.upsert('daily_records', rows, 'enrollment_id,record_date');
+        if (weekly && track.sard_day === wd) {
+          const sr = rows.filter((r) => r.attendance !== 'excused').map((r) => ({ enrollment_id: r.enrollment_id, sard_date: ENTRY.date, done: r.attendance === 'present' || r.attendance === 'late', note: 'من بطاقة الأسبوع', recorded_by: S.me.id, updated_at: new Date().toISOString() }));
+          if (sr.length) await api.upsert('weekly_sard', sr, 'enrollment_id,sard_date');
+        }
+        toast(`حُفظ تعديل ${rows.length} طالبة 🌸`, 'ok'); route();
+      } catch (err) { toast(translateError(err.message), 'bad'); btn.disabled = false; }
+    };
+  }
 
   function attendanceSheet() {
     const byE = Object.fromEntries(existing.map((r) => [r.enrollment_id, r.attendance]));
