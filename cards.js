@@ -623,11 +623,12 @@ const NEGATIVE = /(^|\s)(لا|لم|ما|كلا|ابدا|صفر|0)(\s|$)/;
 function isNegative(v) { return /[❌✖✗⛔]/.test(v) || NEGATIVE.test(norm(v)); }
 
 function readCard(rc) {
-  const items = []; let name = ''; let day = null;
+  const items = []; let name = ''; let day = null; let excused = false;
   for (const raw of rc.lines) {
     const line = cleanLine(raw);
     if (!line) continue;
     const n = norm(line);
+    if (/(معتذر|مستاذن|استئذان|استيذان|اعتذار|اعتذر|عذر)/.test(n)) excused = true;
     if (!day) { const wd = WEEKDAYS_N.findIndex((d) => n.includes(d)); if (wd >= 0) day = wd; }
     const ci = line.indexOf(':');
     if (ci < 0) continue;
@@ -639,7 +640,7 @@ function readCard(rc) {
     if (key === 'x:') continue;
     items.push({ key, label, value });
   }
-  return { sender: rc.sender, name, day, items };
+  return { sender: rc.sender, name, day, items, excused };
 }
 
 const WORD_NUM = { 'وجه': 1, 'وجهين': 2, 'وجهان': 2, 'صفحه': 1, 'صفحتين': 2, 'صفحتان': 2, 'نصف': 0.5, 'ربع': 0.25, 'ثمن': 0.125, 'واحد': 1, 'اثنين': 2, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6, 'سبع': 7, 'عشر': 10 };

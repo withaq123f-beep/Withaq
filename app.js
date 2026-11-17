@@ -710,7 +710,7 @@ PAGES.entry = async (v) => {
       const ev = CardKit.evaluateCard(card, template);
       const surah = card.items.find((i) => i.key === 'surah')?.value || '';
       const amt = (k) => { const it = card.items.find((i) => i.key === k); return it ? CardKit.readAmount(it.value, it.label, k === 'memo' ? surah : '', SURAH_INFO) : null; };
-      return { card, m, ev, memo: amt('memo'), review: amt('review') };
+      return { card, m, ev, excused: !!card.excused, memo: amt('memo'), review: amt('review') };
     });
     const counts = {};
     parsed.forEach((p) => { if (p.m.kind === 'matched') counts[p.m.student.id] = (counts[p.m.student.id] || 0) + 1; });
@@ -724,9 +724,10 @@ PAGES.entry = async (v) => {
         const dayBad = p.card.day != null && p.card.day !== wd;
         return `<article class="stu card-review ${p.ev.missing.length ? 'short' : 'marked'}" data-i="${i}">
           <div class="stu-head" style="flex-wrap:wrap"><b>${esc(p.card.name || p.card.sender || 'بلا اسم')}</b>
-            ${p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}
+            ${p.excused ? '<span class="tag amber">معتذرة</span>' : p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}
             ${dayBad ? `<span class="tag amber">البطاقة ليوم ${DAYS[p.card.day]}</span>` : ''}
             ${p.m.kind === 'matched' && counts[p.m.student.id] > 1 ? '<span class="tag amber">مكرَّرة، تُعتمد الأخيرة</span>' : ''}</div>
+          <label class="field">الحالة<select class="input sm att" aria-label="الحالة"><option value="present"${p.excused ? '' : ' selected'}>حضرت</option><option value="excused"${p.excused ? ' selected' : ''}>مستأذنة / معتذرة</option></select></label>
           <label class="field">الطالبة<select class="input sm pick" aria-label="الطالبة">
             <option value="">${p.m.kind === 'ambiguous' ? 'أكثر من طالبة بهذا الاسم، اختاري' : p.m.kind === 'none' ? 'لم أجد الاسم في الحلقة، اختاري' : ''}</option>
             ${opts.map((o) => `<option value="${o.id}"${o.id === sel ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
@@ -763,6 +764,10 @@ PAGES.entry = async (v) => {
       $$('.card-review', v).forEach((el) => {
         const p = parsed[+el.dataset.i]; const eid = +el.querySelector('.pick').value;
         if (!eid) { unpicked.push(p.card.name || p.card.sender || 'بطاقة بلا اسم'); return; }
+        const exc = el.querySelector('.att')?.value === 'excused';
+        if (exc) { rows.set(eid, { enrollment_id: eid, record_date: ENTRY.date, attendance: 'excused', grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
+          memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
+          memo_pages: null, review_pages: null, card: null, shortcoming: false, shortcoming_items: null }); return; }
         const row = { enrollment_id: eid, record_date: ENTRY.date, attendance: 'present', grade: null, note: null, entered_by: S.me.id, updated_at: new Date().toISOString(),
           memo_from_surah: null, memo_from_ayah: null, memo_to_surah: null, memo_to_ayah: null, review_from_surah: null, review_from_ayah: null, review_to_surah: null, review_to_ayah: null,
           memo_pages: null, review_pages: null,
