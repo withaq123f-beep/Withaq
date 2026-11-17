@@ -599,7 +599,8 @@ PAGES.home = async (v) => {
     const bar = (n, max) => `<i style="display:block;height:6px;border-radius:3px;background:var(--rose);width:${max ? Math.max(4, Math.round((n / max) * 100)) : 0}%"></i>`;
     const bmax = Math.max(1, ...buckets.map(([, f]) => ages.filter(f).length)); const nmax = Math.max(1, ...natRows.map((x) => x[1]));
     return `<section class="sheet" style="margin-bottom:16px"><h2>إحصائيات ${single ? period : 'الفترة'} <small>${single ? '' : `${fmtShort(rFrom)} – ${fmtShort(rTo)}`}</small></h2>
-      <div class="strip strip5" style="margin-bottom:14px">
+      <div class="strip strip6" style="margin-bottom:14px">
+        <div><div class="n num">${scs.filter((c) => c.active).length}</div><div class="l">حلقة</div><div class="s" style="font-size:.78rem;color:var(--ink-3)">${scs.filter((c) => c.active && activeEnrollments([c.id]).length).length} فيها طالبات</div></div>
         <div><div class="n rose num">${f1(memoP)}</div><div class="l">وجهًا حفظًا</div></div>
         <div><div class="n olive num">${f1(revP)}</div><div class="l">وجهًا مراجعة</div></div>
         <div><div class="n num">${stus.length}</div><div class="l">طالبة نشطة</div></div>
