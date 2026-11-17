@@ -840,7 +840,7 @@ PAGES.entry = async (v) => {
       ${parsed.map((p, i) => {
         const opts = (p.m.kind === 'ambiguous' ? p.m.candidates : refs);
         const sel = p.m.kind === 'matched' ? p.m.student.id : '';
-        const dayBad = p.card.day != null && p.card.day !== wd;
+        const dayBad = !weekly && p.card.day != null && p.card.day !== wd; // بطاقة الأنصبة الأسبوعية تُدخل بتاريخ يوم السرد حتى لو كُتب فيها يوم آخر
         return `<article class="stu card-review ${p.ev.missing.length ? 'short' : 'marked'}" data-i="${i}">
           <div class="stu-head" style="flex-wrap:wrap"><b>${esc(p.card.name || p.card.sender || 'بلا اسم')}</b>
             <span class="evwrap">${p.excused ? '<span class="tag amber">معتذرة</span>' : p.ev.missing.length ? `<span class="tag red">تقصير: ${p.ev.missing.length}</span>` : '<span class="tag olive">مكتملة</span>'}</span>
