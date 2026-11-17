@@ -417,3 +417,6 @@ textarea.cards-box { min-height: 220px; font-size: .92rem; line-height: 1.8; }
 @media (min-width: 700px) { .strip5 { grid-template-columns: repeat(5, 1fr); } }
 .strip5 > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
 @media (min-width: 700px) { .strip5 > div:last-child:nth-child(odd) { grid-column: auto; } }
+
+.rangebar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.rangebar .input { width: auto; }
