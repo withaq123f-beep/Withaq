@@ -208,6 +208,13 @@ function supabaseBackend() {
     },
     signupOptions: () => run(sb.rpc('signup_options')),
     archiveAccount: (uid, archive) => run(sb.rpc('set_account_archived', { uid, archive })),
+    // تغيير بريد الحساب أو كلمة مروره (للقائدة فقط، عبر دالة آمنة على الخادم)
+    async adminAccount(user_id, mail, password) {
+      const { data, error } = await sb.functions.invoke('admin-account', { body: { user_id, email: mail || undefined, password: password || undefined } });
+      if (error) { let msg = error.message; try { const j = await error.context.json(); if (j?.error) msg = j.error; } catch { /* تجاهل */ } throw new Error(msg); }
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
     setCircleTeacher: (cid, tid) => run(sb.rpc('set_circle_teacher', { cid, tid })),
     async signUp(name, u, p, requested, track, circles) {
       const { data, error } = await sb.auth.signUp({ email: email(u), password: p, options: { data: { full_name: name, requested_role: requested || null, requested_track: track ? String(track) : null, requested_circles: (circles || []).map(String) }, emailRedirectTo: location.origin + location.pathname } });
@@ -705,9 +712,9 @@ PAGES.entry = async (v) => {
   const weekly = track?.entry_mode === 'weekly';
   // المسار الأسبوعي: حضور يومي بلا بطاقة في أيام المسار، وبطاقة السرد يوم السرد فقط
   const attendOnly = weekly && wd !== (track.sard_day ?? 3) && (track.days || []).includes(wd);
-  // بطاقة الأنصبة الأسبوعية تلصقها مسؤولة المسار (والقائدة) فقط، ويمكنها إدخالها قبل يوم السرد بيوم أو يومين باختيار تاريخ يوم السرد
-  const cardLocked = weekly && wd === (track.sard_day ?? 3) && !(isAdmin() || isSup());
-  const canCardWeekly = weekly && (isAdmin() || isSup());
+  // بطاقة الأنصبة الأسبوعية تلصقها المشرفة أو مسؤولة المسار أو القائدة، ويمكن إدخالها قبل يوم السرد بيوم أو يومين باختيار تاريخ يوم السرد
+  const cardLocked = false; // المشرفة أيضًا تُدخل بطاقة الأنصبة
+  const canCardWeekly = weekly && canEnter();
   const maxDate = (() => { if (!canCardWeekly) return today(); let d = today(); for (let i = 0; i <= 2; i++) { if (new Date(d + 'T12:00:00').getDay() === (track.sard_day ?? 3)) return d; d = addDays(d, 1); } return today(); })();
 
   v.innerHTML = `<div class="wrap">
@@ -1324,6 +1331,26 @@ async function archiveAccount(p) {
   catch (err) { toast(translateError(err.message), 'bad'); }
 }
 
+function credentialsForm(p) {
+  modal(`<h2>بيانات دخول ${esc(p.full_name)}</h2>
+    <form class="form-grid" id="cf">
+      <label class="field full">الإيميل الحالي<input class="input" dir="ltr" name="mail" type="email" value="${esc(p.username || '')}" autocomplete="off"></label>
+      <label class="field full">كلمة مرور جديدة <small style="color:var(--ink-3)">(اتركيها فارغة لعدم تغييرها)</small><input class="input" dir="ltr" name="pw" type="text" minlength="6" autocomplete="new-password" placeholder="٦ أحرف على الأقل"></label>
+      <p class="full" style="color:var(--ink-3);font-size:.86rem">يسري التغيير فورًا، وتحتاج صاحبة الحساب لتسجيل الدخول بالبيانات الجديدة. أبلغيها بها.</p>
+      <div class="actions full"><button class="btn" type="submit">حفظ</button><button class="btn ghost" type="button" data-close>إلغاء</button></div>
+    </form>`, (m, close) => {
+    m.querySelector('#cf').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target); const mail = String(fd.get('mail') || '').trim().toLowerCase(); const pw = String(fd.get('pw') || '');
+      const newMail = mail && mail !== (p.username || '').toLowerCase() ? mail : '';
+      if (!newMail && !pw) { toast('لم تغيّري شيئًا', 'bad'); return; }
+      if (pw && pw.length < 6) { toast('كلمة المرور 6 أحرف على الأقل', 'bad'); return; }
+      const btn = e.target.querySelector('[type=submit]'); btn.disabled = true;
+      try { await api.adminAccount(p.id, newMail, pw); await loadAll(); close(); toast('تم تحديث بيانات الدخول 🔐', 'ok'); route(); }
+      catch (err) { toast(err.message, 'bad'); btn.disabled = false; }
+    };
+  });
+}
 function profileForm(p) {
   if (p.role === 'disabled') { archiveRestorePrompt(p); return; }
   const self = p.id === S.me.id;
@@ -1341,7 +1368,7 @@ function profileForm(p) {
       <fieldset class="field full" id="trackField" style="border:0;padding:0;margin:0"><legend style="margin-bottom:6px">مساراتها <small style="color:var(--ink-3)">(يمكن اختيار أكثر من مسار)</small></legend>
         <div class="choices">${S.tracks.map((t) => `<label class="check"><input type="checkbox" name="track_ids" value="${t.id}"${trackIdsOf(p).includes(t.id) ? ' checked' : ''}> ${esc(t.name)}</label>`).join('')}</div></fieldset>
       <p class="full" id="roleHint" style="color:var(--ink-3);font-size:.86rem"></p>
-      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${!self && isAdmin() ? `<button class="btn danger" type="button" id="arcAcc">${p.role === 'pending' ? 'رفض وأرشفة' : 'أرشفة الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
+      <div class="actions full"><button class="btn" type="submit">${p.role === 'pending' ? 'تفعيل الحساب' : 'حفظ'}</button>${isAdmin() ? '<button class="btn ghost" type="button" id="credAcc">الإيميل وكلمة المرور</button>' : ''}${!self && isAdmin() ? `<button class="btn danger" type="button" id="arcAcc">${p.role === 'pending' ? 'رفض وأرشفة' : 'أرشفة الحساب'}</button>` : ''}<button class="btn ghost" type="button" data-close>إلغاء</button></div>
     </form>`, (m, close) => {
     const rs = m.querySelector('[name=role]'); const tf = m.querySelector('#trackField'); const hint = m.querySelector('#roleHint');
     const HINTS = { teacher: 'تُسنَد حلقاتها من «المسارات والحلقات»، وهي من تُدخل بطاقات الواتساب والسرد.', supervisor: 'تُدخل المهام اليومية لحلقات مسارها.', admin: 'صلاحيات كاملة.', disabled: 'لن تتمكن من الدخول.' };
@@ -1354,6 +1381,7 @@ function profileForm(p) {
       try { await api.update('circles', c.id, { teacher_id: p.id }); await loadAll(); toast(`رُبطت ${c.name} بحساب ${p.full_name} 🌸`, 'ok'); route(); }
       catch (err) { toast(translateError(err.message), 'bad'); }
     }));
+    const ca = m.querySelector('#credAcc'); if (ca) ca.onclick = () => { close(); credentialsForm(p); };
     const da = m.querySelector('#arcAcc'); if (da) da.onclick = async () => { close(); archiveAccount(p); };
     m.querySelector('#pf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
