@@ -625,15 +625,25 @@ function isNegative(v) { return /[❌✖✗⛔]/.test(v) || NEGATIVE.test(norm(v
 function readCard(rc) {
   const items = []; let name = ''; let day = null; let excused = false;
   for (const raw of rc.lines) {
-    const line = cleanLine(raw);
+    const line = cleanLine(String(raw).replace(/\*+/g, ' '));
     if (!line) continue;
     const n = norm(line);
     if (/(معتذر|مستاذن|استئذان|استيذان|اعتذار|اعتذر|عذر)/.test(n)) excused = true;
     if (!day) { const wd = WEEKDAYS_N.findIndex((d) => n.includes(d)); if (wd >= 0) day = wd; }
     const ci = line.indexOf(':');
-    if (ci < 0) continue;
+    if (ci < 0) {
+      // سطر بلا نقطتين: «مقدار الحفظ نصف وجه» ← نبحث عن عنوان بند معروف في أول الكلمات
+      const words = line.split(' ');
+      for (let k = 1; k <= Math.min(4, words.length); k++) {
+        const lab = words.slice(0, k).join(' '); const key = itemKey(lab);
+        if (!key.startsWith('x:') && key !== 'name' && key !== 'day') { items.push({ key, label: lab, value: words.slice(k).join(' ').trim() }); break; }
+      }
+      continue;
+    }
     const label = line.slice(0, ci).trim(); const value = line.slice(ci + 1).trim();
-    if (!label || /بطاقه\s*الحضور/.test(norm(label)) || /معاد\s*توجيه/.test(norm(label))) continue;
+    // «بطاقة الحضور : فاتن» ← الاسم بعد العنوان في السطر نفسه
+    if (/بطاقه\s*الحضور/.test(norm(label))) { if (!name && value && !/(يوم|اليوم)/.test(norm(value))) name = value.replace(/\s+/g, ' ').trim(); continue; }
+    if (!label || /معاد\s*توجيه/.test(norm(label))) continue;
     const key = itemKey(label);
     if (key === 'name') { name = value.replace(/\s+/g, ' ').trim(); continue; }
     if (key === 'day') { const wd = WEEKDAYS_N.findIndex((d) => norm(value).includes(d)); if (wd >= 0) day = wd; continue; }
@@ -644,6 +654,21 @@ function readCard(rc) {
 }
 
 const WORD_NUM = { 'وجه': 1, 'وجهين': 2, 'وجهان': 2, 'صفحه': 1, 'صفحتين': 2, 'صفحتان': 2, 'نصف': 0.5, 'ربع': 0.25, 'ثمن': 0.125, 'واحد': 1, 'اثنين': 2, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6, 'سبع': 7, 'عشر': 10 };
+/** كمية مكتوبة بالكلمات: «وجه ونص» = 1.5، «نص وجه» = 0.5، «وجه واحد» = 1، «٦ أوجه ونصف» = 6.5 */
+function wordQty(v, num) {
+  const FR = { 'نصف': 0.5, 'نص': 0.5, 'ونصف': 0.5, 'ونص': 0.5 };
+  const INT = { 'واحد': 1, 'واحده': 1, 'اثنين': 2, 'اثنان': 2, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6, 'سبع': 7, 'عشر': 10 };
+  const U1 = new Set(['وجه', 'اوجه', 'وجها', 'صفحه', 'صفحات']); const U2 = new Set(['وجهين', 'وجهان', 'صفحتين', 'صفحتان']);
+  const toks = v.split(/\s+/); const hasInt = num != null || toks.some((t) => INT[t]);
+  let total = num != null ? num : 0; let any = num != null;
+  toks.forEach((t, i) => {
+    if (INT[t]) { total += INT[t]; any = true; }
+    else if (FR[t] !== undefined) { total += FR[t]; any = true; }
+    else if (U2.has(t)) { if (!hasInt) { total += 2; any = true; } }
+    else if (U1.has(t) && !hasInt && FR[toks[i - 1]] === undefined) { total += 1; any = true; }
+  });
+  return any ? total : null;
+}
 /** مقدار الحفظ أو المراجعة → عدد الأوجه (الصفحات)، ونطاق بالسورة والآية إن كُتب */
 function readAmount(value, label, surahText, surahs) {
   const v = norm(value);
@@ -655,7 +680,7 @@ function readAmount(value, label, surahText, surahs) {
   } catch (e) { /* نصٌّ بلا سورة */ }
   const num = (() => { const m = /(\d+(?:[.,]\d+)?)/.exec(v); return m ? parseFloat(m[1].replace(',', '.')) : null; })();
   const has = (re) => re.test(v);
-  let qty = num;
+  let qty = wordQty(v, num);
   if (qty == null) { for (const [w, n] of Object.entries(WORD_NUM)) if (new RegExp(`(^|\\s)${w}(\\s|$)`).test(v)) { qty = (qty || 0) + n; } }
   if (qty == null) return { pages: null, range: null };
   if (has(/جز/)) return { pages: qty * 20, range: null };
