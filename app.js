@@ -829,9 +829,11 @@ PAGES.entry = async (v) => {
     const cards = CardKit.splitWithaqCards(text);
     if (!cards.length) { toast('لم أجد بطاقات في النص. تأكدي أن البنود مكتوبة بصيغة «البند : القيمة»', 'bad'); return; }
     const refs = enr.map((x) => ({ id: x.e.id, name: x.s.full_name }));
+    const senderCount = {}; cards.forEach((c) => { if (c.sender) senderCount[c.sender] = (senderCount[c.sender] || 0) + 1; });
     const parsed = cards.map((card) => {
       let m = CardKit.matchStudent(card.name, refs);
-      if (m.kind === 'none' && card.sender) m = CardKit.matchStudent(card.sender, refs);
+      // اسم المرسِل بديلًا للاسم فقط إن كان صاحب بطاقة واحدة (وإلا فمرسِلة واحدة لعدة بطاقات تُربك المطابقة)
+      if (m.kind === 'none' && card.sender && senderCount[card.sender] === 1) m = CardKit.matchStudent(card.sender, refs);
       const ev = CardKit.evaluateCard(card, template);
       const surah = card.items.find((i) => i.key === 'surah')?.value || '';
       const amt = (k) => { const it = card.items.find((i) => i.key === k); return it ? CardKit.readAmount(it.value, it.label, k === 'memo' ? surah : '', SURAH_INFO) : null; };
