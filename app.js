@@ -48,6 +48,7 @@ function nextPos(s, a) {
 
 /* ---------------- مسمَّيات ---------------- */
 const ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'مستأذنة' };
+const CLOSURE = { teacher_excused: 'اعتذار المعلمة', leave: 'إجازة' };
 const STAFF_ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'معتذرة', leave: 'إجازة' };
 // الإجازة متاحة للمشرفة ما لم تكن كل حلقاتها في مسارات لا تسمح بها
 const canLeave = (pid) => { const cs = S.circles.filter((c) => c.teacher_id === pid); if (!cs.length) return true; return cs.some((c) => S.tracks.find((t) => t.id === c.track_id)?.allow_leave !== false); };
@@ -542,14 +543,15 @@ PAGES.home = async (v) => {
   const studentCount = new Set(enr.map((e) => e.student_id)).size;
   const monthPages = recs.filter((r) => r.record_date >= monthStart()).reduce((n, r) => n + memoPages(r), 0);
 
+  const closedToday = new Set((await api.list('circle_closures', { eq: { closure_date: t } }).catch(() => [])).map((x) => x.circle_id));
   const circleRows = circles.filter((c) => isEntryDay(trackOfCircle(c), t)).map((c) => {
     const ce = enr.filter((e) => e.circle_id === c.id);
     const done = todayRecs.filter((r) => enrById[r.enrollment_id].circle_id === c.id).length;
     const cr = r14.filter((r) => enrById[r.enrollment_id].circle_id === c.id);
     const rate = pct(cr.filter(came).length, cr.length);
-    const st = !ce.length ? ['gray', 'لا طالبات'] : done >= ce.length ? ['olive', 'اكتمل اليوم'] : done ? ['amber', `${done} من ${ce.length}`] : ['red', 'لم يُدخل'];
+    const st = !ce.length ? ['gray', 'لا طالبات'] : closedToday.has(c.id) ? ['blue', 'لم تُعقد'] : done >= ce.length ? ['olive', 'اكتمل اليوم'] : done ? ['amber', `${done} من ${ce.length}`] : ['red', 'لم يُدخل'];
     return { c, ce, done, rate, st };
-  }).filter((x) => x.ce.length).sort((a, b) => (a.done >= a.ce.length) - (b.done >= b.ce.length) || a.rate - b.rate);
+  }).filter((x) => x.ce.length).sort((a, b) => ((a.done >= a.ce.length) || closedToday.has(a.c.id)) - ((b.done >= b.ce.length) || closedToday.has(b.c.id)) || a.rate - b.rate);
   const shownRows = circleRows.slice(0, 10); const hiddenDone = circleRows.length - shownRows.length;
 
   const abs = {};
@@ -709,6 +711,7 @@ PAGES.entry = async (v) => {
   const template = track?.card_items || [];
   const enr = activeEnrollments([circle.id]).map((e) => ({ e, s: studentById(e.student_id) })).filter((x) => x.s && x.s.active).sort((a, b) => byName(a.s, b.s));
   const existing = enr.length ? await getRecords(ENTRY.date, ENTRY.date, enr.map((x) => x.e.id)) : [];
+  const closure = (await api.list('circle_closures', { eq: { circle_id: circle.id, closure_date: ENTRY.date } }).catch(() => []))[0] || null;
   const wd = new Date(ENTRY.date + 'T12:00:00').getDay();
   const offDay = track && !isEntryDay(track, ENTRY.date);
   const weekly = track?.entry_mode === 'weekly';
@@ -729,17 +732,21 @@ PAGES.entry = async (v) => {
   </div>
   ${weekly ? `<div class="banner"><span>مسار ${esc(track.name)} حضوره <b>يومي</b> (${daysText(track.days)}) بلا بطاقات، وتُرسل <b>بطاقة السرد</b> يوم ${DAYS[track.sard_day ?? 3]} بعد السرد على الأهل، وحفظها يسجِّل السرد الأسبوعي تلقائيًّا.</span></div>` : ''}
   ${offDay ? `<div class="banner warn"><span>${DAYS[wd]} ليس يوم بطاقات مسار ${esc(track.name)} (${weekly ? `حضور ${daysText(track.days)}، وبطاقة السرد يوم ${DAYS[track.sard_day ?? 3]}` : daysText(track.days)}).</span></div>` : ''}
+  ${closure ? `<div class="banner"><span>الحلقة لم تُعقد في هذا اليوم: <b>${CLOSURE[closure.reason]}</b>. لا يُسجَّل غياب للطالبات.</span><button class="btn sm quiet" id="reopen" type="button">إلغاء وإدخال البيانات</button></div>`
+    : `<details class="sheet" style="margin-top:12px"><summary style="cursor:pointer"><b>الحلقة لم تُعقد اليوم؟</b> <small>اعتذار المعلمة أو إجازة</small></summary>
+      <div class="toolbar" style="margin-top:10px"><label class="field">السبب<select class="input" id="clReason"><option value="teacher_excused">اعتذار المعلمة</option>${track?.allow_leave !== false ? '<option value="leave">إجازة</option>' : ''}</select></label>
+      <button class="btn" id="closeCircle" type="button">تسجيل أن الحلقة لم تُعقد</button></div></details>`}
   ${cardLocked ? `<div class="banner"><span>بطاقة الأنصبة لمسار ${esc(track.name)} تُدخلها <b>مسؤولة المسار</b>، وحضورك يكون في أيام الحضور (${esc(daysText(track.days))}).</span></div>` : ''}
   ${attendOnly && canCardWeekly ? `<div class="banner"><span>لإدخال <b>بطاقة الأنصبة</b> اختاري من حقل «اليوم» يوم السرد (${DAYS[track.sard_day ?? 3]}).</span></div>` : ''}
-  ${attendOnly ? attendanceSheet() : ''}
-  <section class="sheet"${attendOnly || cardLocked ? ' hidden' : ''}>
+  ${attendOnly && !closure ? attendanceSheet() : ''}
+  <section class="sheet"${attendOnly || cardLocked || closure ? ' hidden' : ''}>
     <h2>بطاقات اليوم <small>${existing.length ? `سبق حفظ ${existing.length} من ${enr.length}، والحفظ الجديد يحدِّثها` : `${enr.length} طالبة في الحلقة`}</small></h2>
     <p style="color:var(--ink-2);margin-bottom:10px">انسخي بطاقات الطالبات من الواتساب كما هي، والصقيها هنا. يمكن لصق عدة بطاقات معًا.</p>
     <div class="choices" style="margin-bottom:10px">${template.map((l) => `<span class="tag gray">${esc(l)}</span>`).join('') || '<span class="tag amber">لم تُحدَّد بنود بطاقة هذا المسار</span>'}</div>
     <textarea class="input cards-box" id="cardsText" placeholder="بطاقة الحضور&#10;الاسم : …&#10;اليوم : …">${esc(ENTRY.text)}</textarea>
     <button class="btn block" id="readCards" style="margin-top:10px">قراءة البطاقات</button>
   </section>
-  ${attendOnly || cardLocked ? '' : savedSheet()}
+  ${attendOnly || cardLocked || closure ? '' : savedSheet()}
   <div id="review"></div></div>`;
 
   // المحفوظ لهذا اليوم: تعديل الحالة وبنود البطاقة لمن سبق تسجيلها، ثم حفظ ما عُدِّل دفعة واحدة
@@ -806,7 +813,7 @@ PAGES.entry = async (v) => {
         <div class="choices">${[['present', 'حضرت'], ['absent', 'لم تحضر'], ['excused', 'مستأذنة']].map(([k, l]) => `<button type="button" class="choice${byE[x.e.id] === k ? ' on' : ''}" data-k="${k}">${l}</button>`).join('')}</div></article>`).join('') || '<div class="empty">لا طالبات في الحلقة</div>'}</div>
       <div class="save-dock"><button class="btn" id="saveAtt" type="button">حفظ الحضور</button></div></section>`;
   }
-  if (attendOnly) {
+  if (attendOnly && !closure) {
     $$('#attList .choice', v).forEach((b) => (b.onclick = () => { const c = b.closest('.stu'); c.dataset.att = b.dataset.k; $$('.choice', c).forEach((x) => x.classList.toggle('on', x === b)); }));
     $('#allHere').onclick = () => $$('#attList .stu', v).forEach((c) => { c.dataset.att = 'present'; $$('.choice', c).forEach((x) => x.classList.toggle('on', x.dataset.k === 'present')); });
     $('#saveAtt').onclick = async () => {
@@ -819,6 +826,21 @@ PAGES.entry = async (v) => {
       catch (err) { toast(translateError(err.message), 'bad'); btn.disabled = false; }
     };
   }
+
+  const cc = $('#closeCircle');
+  if (cc) cc.onclick = async () => {
+    const reason = $('#clReason').value;
+    if (existing.length && !(await confirmBox(`للحلقة ${existing.length} سجل محفوظ لهذا اليوم، ولن تُحذف. المتابعة بتسجيل أن الحلقة لم تُعقد؟`, 'متابعة'))) return;
+    cc.disabled = true;
+    try {
+      await api.upsert('circle_closures', [{ circle_id: circle.id, closure_date: ENTRY.date, reason, recorded_by: S.me.id }], 'circle_id,closure_date');
+      // نظهر ذلك في حضور المشرفة إن كان لها حساب (تنجح للقائدة ومسؤولة المسار فقط)
+      if (circle.teacher_id) { try { await api.upsert('staff_attendance', [{ profile_id: circle.teacher_id, record_date: ENTRY.date, status: reason === 'leave' ? 'leave' : 'excused', note: 'من إدخال الحلقة', recorded_by: S.me.id, updated_at: new Date().toISOString() }], 'profile_id,record_date'); } catch { /* اختياري */ } }
+      toast(`سُجِّل: ${CLOSURE[reason]} 🌿`, 'ok'); route();
+    } catch (err) { toast(translateError(err.message), 'bad'); cc.disabled = false; }
+  };
+  const ro = $('#reopen');
+  if (ro) ro.onclick = async () => { try { await api.remove('circle_closures', closure.id); toast('أُلغي التسجيل', 'ok'); route(); } catch (err) { toast(translateError(err.message), 'bad'); } };
 
   $('#eCircle').onchange = (e) => { ENTRY.circleId = +e.target.value; ENTRY.text = ''; ENTRY.dateTouched = false; route(); };
   $$('.cchip', v).forEach((b) => (b.onclick = () => { if (+b.dataset.cid === ENTRY.circleId) return; ENTRY.circleId = +b.dataset.cid; ENTRY.text = ''; route(); }));
