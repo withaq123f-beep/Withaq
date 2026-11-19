@@ -48,7 +48,9 @@ function nextPos(s, a) {
 
 /* ---------------- مسمَّيات ---------------- */
 const ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'مستأذنة' };
-const STAFF_ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'معتذرة' };
+const STAFF_ATT = { present: 'حاضرة', late: 'متأخرة', absent: 'غائبة', excused: 'معتذرة', leave: 'إجازة' };
+// الإجازة متاحة للمشرفة ما لم تكن كل حلقاتها في مسارات لا تسمح بها
+const canLeave = (pid) => { const cs = S.circles.filter((c) => c.teacher_id === pid); if (!cs.length) return true; return cs.some((c) => S.tracks.find((t) => t.id === c.track_id)?.allow_leave !== false); };
 const CTYPE = { memo_review: 'حفظ ومراجعة', fixation: 'تثبيت', unified: 'حفظ موحَّد' };
 const DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 const WEEK_ORDER = [6, 0, 1, 2, 3, 4, 5]; // يبدأ الأسبوع بالسبت
@@ -1219,13 +1221,13 @@ PAGES.reports = async (v) => {
   const sa = teacherIds.length ? await api.list('staff_attendance', { gte: { record_date: REP.from }, lte: { record_date: REP.to }, in: { profile_id: teacherIds } }) : [];
   const staffRows = teacherIds.map((pid) => {
     const mine = sa.filter((x) => x.profile_id === pid); const c = (k) => mine.filter((x) => x.status === k).length;
-    return [profileName(pid), circles.filter((x) => x.teacher_id === pid).map((x) => x.name).join('، '), c('present'), c('late'), c('absent'), c('excused')];
+    return [profileName(pid), circles.filter((x) => x.teacher_id === pid).map((x) => x.name).join('، '), c('present'), c('late'), c('absent'), c('excused'), c('leave')];
   }).sort((a, b) => b[4] - a[4]);
 
   const TABS = {
     students: ['الطالبات', ['الطالبة', 'الحلقة', 'حضور', 'تأخر', 'غياب', 'استئذان', 'نسبة الحضور', 'أوجه الحفظ', 'أوجه المراجعة', 'مرات التقصير', 'آخر موضع'], stuRows, 2],
     circles: ['الحلقات', ['الحلقة', 'المسار', 'مشرفة الحلقة', 'المعلِّمة', 'الطالبات', 'أيام الإدخال', 'نسبة الحضور', 'مرات الغياب', 'مرات التقصير', 'أوجه الحفظ'], cirRows, 4],
-    staff: ['المشرفات', ['مشرفة الحلقة', 'الحلقات', 'حضور', 'تأخر', 'غياب', 'اعتذار'], staffRows, 2],
+    staff: ['المشرفات', ['مشرفة الحلقة', 'الحلقات', 'حضور', 'تأخر', 'غياب', 'اعتذار', 'إجازة'], staffRows, 2],
   };
   const [label, head, rows, numFrom] = TABS[REP.tab];
   const longDate = (d) => fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' });
@@ -1280,7 +1282,7 @@ PAGES.staff = async (v) => {
     <label class="field" style="max-width:220px;margin-bottom:12px">اليوم<input class="input" type="date" id="sDate" value="${STF.date}" max="${today()}"></label>
     <div id="sAtt">${teachers.map((t) => `<article class="stu" data-pid="${esc(t.id)}" data-att="${by[t.id]?.status || ''}">
       <div class="stu-head"><span class="initial">${esc(initial(t.full_name))}</span><b>${esc(t.full_name)}</b><span class="last">${esc(circlesOf(t.id) || 'بلا حلقة')}</span></div>
-      <div class="choices">${Object.entries(STAFF_ATT).map(([k, l]) => `<button type="button" class="choice${by[t.id]?.status === k ? ' on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="choices">${Object.entries(STAFF_ATT).filter(([k]) => k !== 'leave' || canLeave(t.id) || by[t.id]?.status === 'leave').map(([k, l]) => `<button type="button" class="choice${by[t.id]?.status === k ? ' on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
       <input class="input sm note" placeholder="ملاحظة (اختياري)" value="${esc(by[t.id]?.note || '')}" style="margin-top:10px" aria-label="ملاحظة"></article>`).join('') || '<div class="empty">لا مشرفات في نطاقكِ</div>'}</div>
     ${teachers.length ? '<button class="btn block" id="saveStaff" style="margin-top:14px">حفظ الحضور</button>' : ''}
   </section>
@@ -1472,6 +1474,7 @@ PAGES.settings = async (v) => {
       <label class="field">نوع الحلقة<select class="input" name="circle_type">${Object.entries(CTYPE).map(([k, l]) => `<option value="${k}"${(t?.circle_type || 'memo_review') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field">الترتيب<input class="input" name="sort_order" type="number" value="${t?.sort_order ?? S.tracks.length + 1}"></label>
       <label class="field">بطاقة الحضور<select class="input" name="entry_mode"><option value="daily"${(t?.entry_mode || 'daily') === 'daily' ? ' selected' : ''}>يومية في أيام المسار</option><option value="weekly"${t?.entry_mode === 'weekly' ? ' selected' : ''}>أسبوعية يوم السرد</option></select></label>
+      <label class="field full check" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="allow_leave" value="1"${t?.allow_leave === false ? '' : ' checked'}> يُتاح للمشرفات خيار «إجازة» في هذا المسار</label>
       <label class="field">يوم السرد الأسبوعي<select class="input" name="sard_day"><option value="">غير مطالَب بالسرد</option>${WEEK_ORDER.map((d) => `<option value="${d}"${t?.sard_day === d || (!t && d === 4) ? ' selected' : ''}>${DAYS[d]}</option>`).join('')}</select></label>
       <fieldset class="field full" style="border:0;padding:0;margin:0"><legend style="margin-bottom:6px">الأيام</legend><div class="choices">
         ${WEEK_ORDER.map((d) => `<label class="choice"><input type="checkbox" name="days" value="${d}" ${(t?.days || [0, 1, 2, 3]).includes(d) ? 'checked' : ''} style="accent-color:var(--rose-deep)"> ${DAYS[d]}</label>`).join('')}</div></fieldset>
@@ -1481,7 +1484,7 @@ PAGES.settings = async (v) => {
   (m, close) => {
     m.querySelector('#tf').onsubmit = async (e) => {
       e.preventDefault(); const fd = new FormData(e.target);
-      const row = { name: fd.get('name').trim(), category: fd.get('category').trim() || null, description: fd.get('description').trim() || null, circle_type: fd.get('circle_type'), days: fd.getAll('days').map(Number).sort(), sort_order: +fd.get('sort_order') || 0, card_items: cleanTemplateItems(fd.get('card_items')), sard_day: fd.get('sard_day') === '' ? null : +fd.get('sard_day'), entry_mode: fd.get('entry_mode') };
+      const row = { name: fd.get('name').trim(), category: fd.get('category').trim() || null, description: fd.get('description').trim() || null, circle_type: fd.get('circle_type'), days: fd.getAll('days').map(Number).sort(), sort_order: +fd.get('sort_order') || 0, card_items: cleanTemplateItems(fd.get('card_items')), sard_day: fd.get('sard_day') === '' ? null : +fd.get('sard_day'), entry_mode: fd.get('entry_mode'), allow_leave: fd.get('allow_leave') === '1' };
       if (row.entry_mode === 'weekly' && row.sard_day == null) { toast('البطاقة الأسبوعية تحتاج يوم سرد للمسار', 'bad'); return; }
       if (!row.days.length) { toast('اختاري يومًا واحدًا على الأقل', 'bad'); return; }
       try {
