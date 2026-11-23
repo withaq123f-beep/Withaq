@@ -673,6 +673,12 @@ function wordQty(v, num) {
 function readAmount(value, label, surahText, surahs) {
   const v = norm(value);
   if (!v || isNegative(value)) return { pages: 0, range: null };
+  // «١١ وجه من سورة البقرة» أو «وجه من الرحمن (31-55)»: الكمية بالأوجه مكتوبة صراحةً، فلا تُحوَّل السورة إلى نطاق كامل
+  if (/(^|\s)(وجه|اوجه|وجها|وجهين|وجهان|صفحه|صفحات|صفحتين|صفحتان)(\s|$)/.test(v) && !/(^|\s)الى(\s|$)/.test(v) && !/جز|حزب/.test(v)) {
+    const stripped = v.replace(/\([^)]*\)/g, ' ').replace(/\d+\s*-\s*\d+/g, ' ');
+    const m2 = /(\d+(?:[.,]\d+)?)/.exec(stripped); const q2 = wordQty(stripped, m2 ? parseFloat(m2[1].replace(',', '.')) : null);
+    if (q2 != null && q2 > 0) return { pages: q2, range: null };
+  }
   const src = surahText ? `${surahText} ${value}` : value;
   try {
     const pr = parseRange(src, surahs);
