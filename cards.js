@@ -658,7 +658,7 @@ const WORD_NUM = { 'وجه': 1, 'وجهين': 2, 'وجهان': 2, 'صفحه': 1,
 function wordQty(v, num) {
   const FR = { 'نصف': 0.5, 'نص': 0.5, 'ونصف': 0.5, 'ونص': 0.5 };
   const INT = { 'واحد': 1, 'واحده': 1, 'اثنين': 2, 'اثنان': 2, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6, 'سبع': 7, 'عشر': 10 };
-  const U1 = new Set(['وجه', 'اوجه', 'وجها', 'صفحه', 'صفحات']); const U2 = new Set(['وجهين', 'وجهان', 'صفحتين', 'صفحتان']);
+  const U1 = new Set(['وجه', 'اوجه', 'وجها', 'وجهه', 'اوجهه', 'صفحه', 'صفحات']); const U2 = new Set(['وجهين', 'وجهان', 'صفحتين', 'صفحتان']);
   const toks = v.split(/\s+/); const hasInt = num != null || toks.some((t) => INT[t]);
   let total = num != null ? num : 0; let any = num != null;
   toks.forEach((t, i) => {
@@ -673,10 +673,19 @@ function wordQty(v, num) {
 function readAmount(value, label, surahText, surahs) {
   const v = norm(value);
   if (!v || isNegative(value)) return { pages: 0, range: null };
-  // «١١ وجه من سورة البقرة» أو «وجه من الرحمن (31-55)»: الكمية بالأوجه مكتوبة صراحةً، فلا تُحوَّل السورة إلى نطاق كامل
-  if (/(^|\s)(وجه|اوجه|وجها|وجهين|وجهان|صفحه|صفحات|صفحتين|صفحتان)(\s|$)/.test(v) && !/(^|\s)الى(\s|$)/.test(v) && !/جز|حزب/.test(v)) {
-    const stripped = v.replace(/\([^)]*\)/g, ' ').replace(/\d+\s*-\s*\d+/g, ' ');
-    const m2 = /(\d+(?:[.,]\d+)?)/.exec(stripped); const q2 = wordQty(stripped, m2 ? parseFloat(m2[1].replace(',', '.')) : null);
+  // الكمية بالأوجه مكتوبة صراحةً («١١ وجه من سورة البقرة»، «وجه من الرحمن (31-55)»، «الوجه الأول من الشورى»)
+  // فنعتمدها ولا نحوّل اسم السورة إلى نطاق كامل، ولا نأخذ أرقام الآيات أوجهًا
+  const UNIT = /(^|\s|\d)(ال)?(وجه|اوجه|وجها|وجهه|اوجهه|وجهين|وجهان|صفحه|صفحات|صفحتين|صفحتان)(?=\s|$|\d|\(|\)|،|,)/;
+  if (UNIT.test(v) && !/جز|حزب/.test(v)) {
+    let t = v.replace(/\(([^)]*)\)/g, (m, inner) => (UNIT.test(inner) ? ` ${inner} ` : ' '));
+    t = t.replace(/\d+\s*(الى|الي|حتى|حتي|\.{2,}|-)\s*\d+/g, ' ').replace(/(^|\s)من\s*\d+/g, ' ');
+    let q2 = null;
+    if (/(^|\s)الوجه(\s|$)/.test(t)) { // «الوجه الأول والثاني» أو «الوجه 3»: ترتيب الوجه لا عدده
+      const ord = (t.match(/(الاول|الاولى|الاوله|الثاني|الثانيه|الثالث|الثالثه|الرابع|الرابعه|الخامس|الخامسه|السادس|السادسه|الاخير|الاخيره)/g) || []).length;
+      q2 = Math.max(1, ord);
+    } else {
+      const m2 = /(\d+(?:[.,]\d+)?)/.exec(t); q2 = wordQty(t, m2 ? parseFloat(m2[1].replace(',', '.')) : null);
+    }
     if (q2 != null && q2 > 0) return { pages: q2, range: null };
   }
   const src = surahText ? `${surahText} ${value}` : value;
