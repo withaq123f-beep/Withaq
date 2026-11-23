@@ -243,6 +243,7 @@ function supabaseBackend() {
     insert: (t, row) => run(sb.from(t).insert(row).select().single()),
     update: (t, id, patch) => run(sb.from(t).update(patch).eq('id', id).select().single()),
     remove: (t, id) => run(sb.from(t).delete().eq('id', id)),
+    removeWhere: (t, f = {}) => { let q = sb.from(t).delete(); for (const [c, v] of Object.entries(f.in || {})) q = q.in(c, v); for (const [c, v] of Object.entries(f.gte || {})) q = q.gte(c, v); for (const [c, v] of Object.entries(f.lte || {})) q = q.lte(c, v); return run(q); },
     upsert: (t, rows, onConflict) => run(sb.from(t).upsert(rows, { onConflict }).select()),
   };
 }
@@ -1480,7 +1481,7 @@ PAGES.settings = async (v) => {
   <div class="toolbar"><div class="end"><button class="btn ghost" id="addTrack">مسار جديد</button><button class="btn" id="addCircle">حلقة جديدة</button></div></div>
   ${S.tracks.map((t) => {
     const cs = S.circles.filter((c) => c.track_id === t.id).sort(byName);
-    return `<section class="sheet"><h2>مسار ${esc(t.name)} <button class="btn sm ghost" data-track="${t.id}">تعديل المسار</button></h2>
+    return `<section class="sheet"><h2>مسار ${esc(t.name)} <button class="btn sm ghost" data-track="${t.id}">تعديل المسار</button>${isAdmin() || myTrackIds().includes(t.id) ? ` <button class="btn sm quiet" data-tleave="${t.id}">إجازة المسار</button>` : ''}</h2>
       <div class="choices" style="margin:-4px 0 10px">${t.description ? `<span class="tag gray">${esc(t.description)}</span>` : ''}${t.category ? `<span class="tag rose">${esc(t.category)}</span>` : ''}<span class="tag olive">${CTYPE[t.circle_type] || ''}</span><span class="tag blue">${daysText(t.days)}</span>${t.entry_mode === 'weekly' ? '<span class="tag rose">بطاقة أسبوعية</span>' : ''}<span class="tag ${t.sard_day == null ? 'gray' : 'amber'}">${t.sard_day == null ? 'بلا سرد' : `السرد: ${DAYS[t.sard_day]}`}</span></div>
       ${(t.card_items || []).length ? `<p class="s" style="color:var(--ink-3);font-size:.84rem;margin-bottom:4px">بنود البطاقة: ${esc(t.card_items.join('، '))}</p>` : ''}
       <p class="s" style="color:var(--ink-3);font-size:.86rem;margin-bottom:6px">مسؤولة المسار: ${esc(leadOf(t.id) || 'لم تُحدَّد بعد')}</p>
@@ -1548,6 +1549,34 @@ PAGES.settings = async (v) => {
       };
     });
   };
+  // إجازة مسار كامل: تُسجَّل «لم تُعقد» لكل حلقات المسار في أيام حلقاته ضمن الفترة
+  const trackLeaveForm = (t) => modal(`<h2>إجازة مسار ${esc(t.name)}</h2>
+    <form class="form-grid" id="tl">
+      <label class="field">من<input class="input" type="date" name="from" value="${today()}" required></label>
+      <label class="field">إلى<input class="input" type="date" name="to" value="${today()}" required></label>
+      <p class="full" style="color:var(--ink-2);font-size:.88rem">تُسجَّل إجازة لكل حلقات المسار في أيام حلقاته ضمن الفترة، فلا تُحسب الطالبات غائبات ولا تُطلب بطاقات. ما سُجِّل فعلًا من حضور لا يُمسّ.</p>
+      <div class="actions full"><button class="btn" type="submit">تسجيل الإجازة</button><button class="btn ghost" type="button" id="tlUndo">إلغاء إجازة الفترة</button><button class="btn ghost" type="button" data-close>إغلاق</button></div>
+    </form>`, (m, close) => {
+    const range = () => { const fd = new FormData(m.querySelector('#tl')); let a = fd.get('from'); let b = fd.get('to'); if (a > b) [a, b] = [b, a]; return [a, b]; };
+    const cids = S.circles.filter((c) => c.track_id === t.id).map((c) => c.id);
+    m.querySelector('#tl').onsubmit = async (e) => {
+      e.preventDefault(); const [a, b] = range();
+      const dates = []; for (let d = a, i = 0; d <= b && i < 62; d = addDays(d, 1), i++) if (isEntryDay(t, d)) dates.push(d);
+      if (!dates.length) { toast('لا أيام حلقات للمسار في هذه الفترة', 'bad'); return; }
+      if (!cids.length) { toast('لا حلقات في هذا المسار', 'bad'); return; }
+      const rows = cids.flatMap((cid) => dates.map((d) => ({ circle_id: cid, closure_date: d, reason: 'leave', recorded_by: S.me.id })));
+      const btn = e.target.querySelector('[type=submit]'); btn.disabled = true;
+      try { await api.upsert('circle_closures', rows, 'circle_id,closure_date'); close(); toast(`سُجِّلت إجازة ${t.name}: ${dates.length} يوم × ${cids.length} حلقة 🌿`, 'ok'); }
+      catch (err) { toast(translateError(err.message), 'bad'); btn.disabled = false; }
+    };
+    m.querySelector('#tlUndo').onclick = async () => {
+      const [a, b] = range();
+      if (!(await confirmBox(`إلغاء إجازة ${t.name} من ${fmtShort(a)} إلى ${fmtShort(b)}؟`, 'إلغاء الإجازة'))) return;
+      try { await api.removeWhere('circle_closures', { in: { circle_id: cids }, gte: { closure_date: a }, lte: { closure_date: b } }); close(); toast('أُلغيت إجازة الفترة', 'ok'); }
+      catch (err) { toast(translateError(err.message), 'bad'); }
+    };
+  });
+  $$('[data-tleave]', v).forEach((b) => (b.onclick = () => trackLeaveForm(S.tracks.find((t) => t.id === +b.dataset.tleave))));
   $('#addTrack').onclick = () => trackForm();
   $('#addCircle').onclick = () => circleForm();
   $$('[data-track]', v).forEach((b) => (b.onclick = () => trackForm(S.tracks.find((t) => t.id === +b.dataset.track))));
